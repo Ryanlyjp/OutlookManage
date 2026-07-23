@@ -1,0 +1,90 @@
+# ---- local plan / agent artifacts ----
+plan.md
+
+# ---- local config (keep example only) ----
+config.json
+config.yml
+config.yaml
+.env
+.env.*
+!.env.example
+
+# ---- local data / runtime databases ----
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db.backup*
+*.sqlite
+*.sqlite3
+
+# ---- logs ----
+logs/*
+!logs/.gitkeep
+*.log
+
+# ---- secrets / tokens / credentials ----
+**/oauth2.txt
+**/oauth.txt
+**/not_oauth2.txt
+**/Results/
+**/*token*
+**/*secret*
+**/*password*
+!**/*password*.py
+!**/*token*.py
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+credentials.*
+secrets.*
+
+# ---- caches / bytecode ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- virtual envs ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- browser automation runtime ----
+**/browser_profiles/
+**/browser_data/
+**/user_data/
+
+# ---- IDE / OS junk ----
+.idea/
+.vscode/
+.claude/
+.grok/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- temp / probe dumps ----
+_tmp_*
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
