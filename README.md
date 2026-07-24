@@ -265,3 +265,9 @@ A: 本目录即独立 git 仓库；只提交源码与 `config.example.json`，�
 ## License / 声明
 
 仅供自有账号运维与技术研究。请遵守微软服务条款与当地法律；勿将真实账号库、密码、token、远程凭据推送到公开仓库。
+
+---
+
+## 友情链接 / Community
+
+- [linux.do](https://linux.do) — 新的理想型社区 / a thriving developer community.
