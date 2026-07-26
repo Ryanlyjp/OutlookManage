@@ -51,6 +51,24 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE INDEX IF NOT EXISTS idx_history_account ON history(account_id, id DESC);
 """
 
+# 总览统计缓存：避免每次全表扫 / 前端等全量列表
+STATS_CACHE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS stats_cache (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+"""
+
+ACCOUNTS_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_accounts_health ON accounts(health_status, health_severity);
+CREATE INDEX IF NOT EXISTS idx_accounts_graph ON accounts(graph_status);
+CREATE INDEX IF NOT EXISTS idx_accounts_imap ON accounts(imap_status);
+CREATE INDEX IF NOT EXISTS idx_accounts_pop ON accounts(pop_status);
+CREATE INDEX IF NOT EXISTS idx_accounts_remote ON accounts(remote_sync_status);
+CREATE INDEX IF NOT EXISTS idx_accounts_proto ON accounts(last_protocol_test_at);
+"""
+
 # 增量迁移：旧库缺失的列在此补齐（幂等）
 MIGRATIONS = {
     "health_severity": "TEXT DEFAULT ''",
@@ -90,6 +108,8 @@ def init_db(db_path: Path) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(ACCOUNTS_SCHEMA)
         conn.executescript(HISTORY_SCHEMA)
+        conn.executescript(STATS_CACHE_SCHEMA)
+        conn.executescript(ACCOUNTS_INDEXES)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
         for column, decl in MIGRATIONS.items():
             if column not in existing:

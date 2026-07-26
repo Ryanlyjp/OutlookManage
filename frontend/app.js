@@ -151,11 +151,9 @@ function syncAliveThresholdInputs() {
 
 function updateAliveThresholdSummary() {
   const el = $('#alive-threshold-count');
-  const current = $('#alive-threshold-current');
-  if (!el || !current) return;
+  if (!el) return;
   const matched = ALL_ACCOUNTS.filter(isAliveOverThreshold).length;
   el.textContent = String(matched);
-  current.textContent = `当前阈值：${APPLIED_ALIVE_THRESHOLD.years}年${APPLIED_ALIVE_THRESHOLD.months}月${APPLIED_ALIVE_THRESHOLD.days}天`;
 }
 
 function applyAliveThreshold(showToast = true) {
@@ -175,30 +173,52 @@ function resetAliveThreshold() {
   toast('已重置为 7 天');
 }
 
-// 统计卡片：直接由账号列表(含全部字段)在前端计算，无需后端
+function applyStatsToUi(stats) {
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  const s = {
+    total: stats.total ?? stats.total_accounts ?? 0,
+    normal: stats.normal ?? stats.healthy ?? 0,
+    banned: stats.banned ?? 0,
+    otherError: stats.other_error ?? stats.otherError ?? 0,
+    synced: stats.synced ?? stats.remote_ready ?? 0,
+    untested: stats.untested ?? 0,
+    graph: stats.graph ?? 0,
+    imapPop: stats.imap_pop ?? stats.imapPop ?? 0,
+    neverSynced: stats.never_synced ?? stats.neverSynced ?? 0,
+  };
+  set('#stat-total', s.total);
+  set('#stat-normal', s.normal);
+  set('#stat-banned', s.banned);
+  set('#stat-other-error', s.otherError);
+  set('#stat-synced', s.synced);
+  set('#stat-untested', s.untested);
+  set('#stat-graph', s.graph);
+  set('#stat-imap-pop', s.imapPop);
+  renderWorkflow(s);
+  return s;
+}
+
+// 本地列表重算（列表加载后校正；首屏优先用 /api/status 缓存）
 function computeStats() {
   const a = ALL_ACCOUNTS;
-  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
-  const stats = {
+  return applyStatsToUi({
     total: a.length,
     normal: a.filter(isNormalAccount).length,
     banned: a.filter(isBannedAccount).length,
-    otherError: a.filter(isOtherErrorAccount).length,
+    other_error: a.filter(isOtherErrorAccount).length,
     synced: a.filter(isRemoteSynced).length,
     untested: a.filter(isUntestedAccount).length,
     graph: a.filter((x) => x.graph_status === 'ok').length,
-    imapPop: a.filter((x) => x.imap_status === 'ok' || x.pop_status === 'ok').length,
-    neverSynced: a.filter(isNeverSynced).length,
-  };
-  set('#stat-total', stats.total);
-  set('#stat-normal', stats.normal);
-  set('#stat-banned', stats.banned);
-  set('#stat-other-error', stats.otherError);
-  set('#stat-synced', stats.synced);
-  set('#stat-untested', stats.untested);
-  set('#stat-graph', stats.graph);
-  set('#stat-imap-pop', stats.imapPop);
-  renderWorkflow(stats);
+    imap_pop: a.filter((x) => x.imap_status === 'ok' || x.pop_status === 'ok').length,
+    never_synced: a.filter(isNeverSynced).length,
+  });
+}
+
+async function loadStatus() {
+  try {
+    const d = await api('/api/status');
+    if (d.summary) applyStatsToUi(d.summary);
+  } catch (_) { /* 忽略，等账号列表回填 */ }
 }
 
 function renderWorkflow(stats) {
@@ -211,24 +231,24 @@ function renderWorkflow(stats) {
   const btn = $('#next-action-btn');
   if (!desc || !btn) return;
   if (stats.total === 0) {
-    desc.textContent = '当前没有账号，先导入账号或加载注册产出 oauth2.txt。';
-    btn.textContent = '去导入账号';
-    btn.dataset.target = '#import';
+    desc.textContent = '当前没有账号，先在工作台导入账号或加载 oauth2.txt。';
+    btn.textContent = '去工作台导入';
+    btn.dataset.target = '#workspace';
     btn.dataset.action = '';
   } else if (stats.untested > 0) {
-    desc.textContent = `还有 ${stats.untested} 个账号未测试，建议先完成协议测试再同步远程。`;
+    desc.textContent = `还有 ${stats.untested} 个账号未测试，建议在工作台先完成协议测试。`;
     btn.textContent = '测试未测试';
-    btn.dataset.target = '#tasks';
+    btn.dataset.target = '#workspace';
     btn.dataset.action = 'test-untested';
   } else if (stats.neverSynced > 0) {
-    desc.textContent = `有 ${stats.neverSynced} 个可用账号尚未上传远程，建议执行一键同步未上传。`;
+    desc.textContent = `有 ${stats.neverSynced} 个可用账号尚未上传远程，建议一键同步未上传。`;
     btn.textContent = '同步未上传';
-    btn.dataset.target = '#tasks';
+    btn.dataset.target = '#workspace';
     btn.dataset.action = 'sync-never-synced';
   } else {
-    desc.textContent = '当前没有明显待办，可在账号池筛选异常账号或执行日常维护。';
-    btn.textContent = '查看账号池';
-    btn.dataset.target = '#accounts';
+    desc.textContent = '当前没有明显待办。可在账号池维护，或到导出页按条件出货。';
+    btn.textContent = '打开导出';
+    btn.dataset.target = '#export';
     btn.dataset.action = '';
   }
 }
@@ -330,7 +350,7 @@ function renderTable() {
         </div>
       </td>
     </tr>`;
-  }).join('') : '<tr><td colspan="9" class="empty-state"><b>暂无账号</b><span>下一步：导入账号或加载注册产出 oauth2.txt。</span><button class="btn sm primary" data-empty-jump="#import">去导入</button></td></tr>';
+  }).join('') : '<tr><td colspan="9" class="empty-state"><b>暂无账号</b><span>下一步：到工作台导入账号或加载 oauth2.txt。</span><button class="btn sm primary" data-empty-jump="#workspace">去工作台</button></td></tr>';
   $('#page-info').textContent = `${PAGE.page} / ${pages}`;
   $('#table-summary').textContent = `筛选结果 ${total} 个 · 本页 ${pageRows.length} · 已选 ${SELECTED.size}`;
   $('#selected-count').textContent = `已选 ${SELECTED.size}`;
@@ -364,6 +384,8 @@ async function loadLogs() {
 }
 
 async function refreshAll() {
+  // 统计先秒开（读 DB 缓存）；账号全量列表 / 日志并行后台加载
+  await loadStatus();
   await Promise.all([loadAccounts(), loadLogs()]);
 }
 
@@ -499,7 +521,37 @@ const JOB_NAME = {
   delete: '批量删除',
 };
 
+const PAGE_IDS = ['overview', 'workspace', 'accounts', 'export', 'config', 'logs'];
+// 旧 hash 兼容
+const PAGE_ALIASES = {
+  import: 'workspace',
+  tasks: 'workspace',
+};
+
+function switchPage(hash) {
+  let id = String(hash || '#overview').replace(/^#/, '');
+  if (PAGE_ALIASES[id]) id = PAGE_ALIASES[id];
+  if (!PAGE_IDS.includes(id)) id = 'overview';
+  PAGE_IDS.forEach((pid) => {
+    const el = document.getElementById(pid);
+    if (el) el.classList.toggle('active', pid === id);
+  });
+  document.querySelectorAll('.nav a[href^="#"]').forEach((a) => {
+    const href = (a.getAttribute('href') || '').replace(/^#/, '');
+    a.classList.toggle('active', href === id);
+  });
+  if (location.hash !== `#${id}`) {
+    try { history.replaceState(null, '', `#${id}`); } catch (_) { location.hash = id; }
+  }
+  return id;
+}
+
 function scrollToSection(target) {
+  const hash = String(target || '');
+  if (hash.startsWith('#')) {
+    switchPage(hash);
+    return;
+  }
   const el = document.querySelector(target);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -565,12 +617,19 @@ function pollJob(jobId, title) {
       if (j.state === 'done' || j.state === 'cancelled' || j.state === 'failed') {
         clearInterval(jobTimer);
         CURRENT_JOB_ID = null;
-        const msg = j.state === 'cancelled'
-          ? `${title} 已取消：已处理 ${j.processed}，成功 ${j.succeeded}，失败 ${j.failed}，跳过 ${j.skipped}`
-          : (j.state === 'failed'
-            ? `${title} 失败：${j.error || '未知错误'}`
-            : `${title} 完成：成功 ${j.succeeded}，失败 ${j.failed}，跳过 ${j.skipped}`);
-        toast(msg, 5000);
+        if (j.state === 'done' && (j.type === 'export' || j.export_ready || j.export_filename)) {
+          const fname = j.export_filename || 'export.txt';
+          const n = j.export_count != null ? j.export_count : j.succeeded;
+          toast(`${title} 完成：导出 ${n} 个（outlook ${j.export_outlook || 0} / hotmail ${j.export_hotmail || 0}），开始下载 ${fname}`, 6000);
+          triggerExportDownload(jobId);
+        } else {
+          const msg = j.state === 'cancelled'
+            ? `${title} 已取消：已处理 ${j.processed}，成功 ${j.succeeded}，失败 ${j.failed}，跳过 ${j.skipped}`
+            : (j.state === 'failed'
+              ? `${title} 失败：${j.error || '未知错误'}`
+              : `${title} 完成：成功 ${j.succeeded}，失败 ${j.failed}，跳过 ${j.skipped}`);
+          toast(msg, 5000);
+        }
         await refreshAll();
       } else {
         await loadAccounts();
@@ -605,7 +664,7 @@ async function openDrawer(id) {
     $('#drawer-title').textContent = a.email;
     const reason = a.ban_reason || a.error_detail;
     const recoverBtn = canShowRecoverAbuse(a)
-      ? `<button class="btn sm" data-dact="recover" data-id="${id}">恢复 ABUSE</button>`
+      ? `<button class="btn sm secondary" data-dact="recover" data-id="${id}">恢复 ABUSE</button>`
       : '';
     const histRows = d.history.length ? d.history.map((h) =>
       `<tr><td class="nowrap">${esc(h.created_at)}</td><td>${esc(h.action)}</td><td>${chip(h.status)}</td><td>${esc(h.detail)}</td></tr>`
@@ -634,8 +693,8 @@ async function openDrawer(id) {
       </div>
       <div class="drawer-actions">
         <button class="btn sm primary" data-dact="save" data-id="${id}">保存修改到本地库</button>
-        <button class="btn sm" data-dact="refresh" data-id="${id}">刷新 token</button>
-        <button class="btn sm" data-dact="protocol" data-id="${id}">协议测试</button>
+        <button class="btn sm secondary" data-dact="refresh" data-id="${id}">刷新 token</button>
+        <button class="btn sm success" data-dact="protocol" data-id="${id}">协议测试</button>
         ${recoverBtn}
         <button class="btn sm danger" data-dact="remote-remove" data-id="${id}">从远程移除(留本地)</button>
         <button class="btn sm danger" data-dact="purge" data-id="${id}">彻底删除(本地+远程)</button>
@@ -676,15 +735,17 @@ async function drawerAction(act, id) {
 }
 
 // ---------- 配置 ----------
-function addMapRow(domain = '', gid = '') {
-  const row = document.createElement('div');
-  row.className = 'map-row';
-  row.innerHTML = `<input class="map-domain" placeholder="outlook.com" value="${esc(domain)}">
-    <span>→</span>
-    <input class="map-gid" type="number" placeholder="分组ID" value="${gid ?? ''}">
-    <button class="btn sm ghost map-del" type="button">删除</button>`;
-  row.querySelector('.map-del').onclick = () => row.remove();
-  $('#map-rows').appendChild(row);
+const FIXED_DOMAINS = ['outlook.com', 'hotmail.com'];
+
+function setMapGid(domain, value) {
+  const el = domain === 'hotmail.com' ? $('#map-gid-hotmail') : $('#map-gid-outlook');
+  el.value = value === undefined || value === null || value === '' ? '' : value;
+}
+
+function readMapGid(domain) {
+  const el = domain === 'hotmail.com' ? $('#map-gid-hotmail') : $('#map-gid-outlook');
+  const gid = parseInt(el.value, 10);
+  return Number.isInteger(gid) ? gid : null;
 }
 
 async function loadConfig() {
@@ -696,19 +757,15 @@ async function loadConfig() {
   $('#cfg-recipient').value = c.external_recipient || '';
   $('#cfg-skip-unmapped').checked = c.skip_unmapped !== false;
   $('#concurrency').value = c.default_concurrency || 100;
-  $('#map-rows').innerHTML = '';
   const map = c.group_map || {};
-  const keys = Object.keys(map);
-  if (keys.length === 0) addMapRow();
-  else keys.forEach((k) => addMapRow(k, map[k]));
+  FIXED_DOMAINS.forEach((domain) => setMapGid(domain, map[domain]));
 }
 
 async function saveConfig() {
   const group_map = {};
-  $$('#map-rows .map-row').forEach((row) => {
-    const domain = row.querySelector('.map-domain').value.trim().toLowerCase();
-    const gid = parseInt(row.querySelector('.map-gid').value, 10);
-    if (domain && Number.isInteger(gid)) group_map[domain] = gid;
+  FIXED_DOMAINS.forEach((domain) => {
+    const gid = readMapGid(domain);
+    if (gid !== null) group_map[domain] = gid;
   });
   await api('/api/config', { method: 'PUT', body: JSON.stringify({
     proxy_url: $('#cfg-proxy').value,
@@ -750,7 +807,6 @@ $('#load-default-btn').onclick = () => api('/api/accounts/load-default-file').th
 $('#file-input').onchange = (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]).catch((err) => toast(err.message, 4200)); };
 $('#refresh-view-btn').onclick = () => refreshAll().catch((e) => toast(e.message, 4200));
 $('#save-config-btn').onclick = () => saveConfig().catch((e) => toast(e.message, 4200));
-$('#add-map-row').onclick = () => addMapRow();
 $('#search-input').oninput = () => { PAGE.page = 1; renderTable(); };
 $('#filter-select').onchange = () => { PAGE.page = 1; renderTable(); };
 $('#domain-select').onchange = () => { PAGE.page = 1; renderTable(); };
@@ -804,13 +860,56 @@ document.querySelectorAll('[data-del]').forEach((btn) => {
   btn.onclick = () => deleteBatch(btn.dataset.del);
 });
 
-document.querySelectorAll('[data-export]').forEach((btn) => {
-  btn.onclick = () => {
-    const cat = btn.dataset.export;
-    window.open(`/api/accounts/export?category=${cat}&with_reason=true`, '_blank');
-    toast(`正在导出「${btn.textContent}」并下载`);
-  };
+function exportMinDays() {
+  const preset = $('#export-days-preset')?.value || '7';
+  if (preset === 'custom') return Math.max(0, parseInt($('#export-days-custom')?.value, 10) || 0);
+  return Math.max(0, parseInt(preset, 10) || 0);
+}
+
+function exportPayload() {
+  const count = Math.max(1, parseInt($('#export-count')?.value, 10) || 1);
+  const domain = $('#export-domain')?.value || 'all';
+  const min_registered_days = exportMinDays();
+  // 默认复测：无勾选框时也视为 true
+  const retestEl = $('#export-retest');
+  const retest = retestEl ? !!retestEl.checked : true;
+  const concurrency = parseInt($('#concurrency')?.value, 10) || 8;
+  return { count, domain, min_registered_days, retest, concurrency };
+}
+
+function triggerExportDownload(jobId) {
+  const a = document.createElement('a');
+  a.href = `/api/accounts/export/download/${encodeURIComponent(jobId)}`;
+  a.download = '';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+$('#export-days-preset') && ($('#export-days-preset').onchange = () => {
+  const wrap = $('#export-days-custom-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('hidden', $('#export-days-preset').value !== 'custom');
 });
+// 默认开启导出前复测
+if ($('#export-retest')) $('#export-retest').checked = true;
+$('#export-confirm-btn') && ($('#export-confirm-btn').onclick = async () => {
+  const p = exportPayload();
+  if (!confirm(
+    `确认导出最多 ${p.count} 个存活账号？\n` +
+    `后缀：${p.domain}；注册满 ${p.min_registered_days} 天；复测：${p.retest ? '是' : '否'}\n` +
+    `成功导出的账号将从本地与远程删除，且不可恢复。`
+  )) return;
+  try {
+    const d = await api('/api/accounts/export/run', { method: 'POST', body: JSON.stringify(p) });
+    toast(`导出任务已启动${d.filename ? ` → ${d.filename}` : ''}`);
+    pollJob(d.job_id, '导出');
+  } catch (e) {
+    toast(`启动导出失败：${e.message}`, 4200);
+  }
+});
+$('#goto-export-btn') && ($('#goto-export-btn').onclick = () => switchPage('#export'));
 
 $('#account-table').onclick = (e) => {
   const emptyJump = e.target.closest('[data-empty-jump]');
@@ -934,22 +1033,15 @@ $('#reconcile-remote-btn').onclick = async () => {
   } catch (e) { toast(`启动失败：${e.message}`, 4200); }
 };
 
-// 侧栏导航高亮：点击即时高亮 + 滚动时按当前区块自动高亮
-const navLinks = Array.from(document.querySelectorAll('.nav a'));
-function setActive(hash) {
-  navLinks.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === hash));
-}
-navLinks.forEach((a) => a.addEventListener('click', () => setActive(a.getAttribute('href'))));
-const spySections = ['overview', 'import', 'tasks', 'accounts', 'config', 'logs']
-  .map((id) => document.getElementById(id)).filter(Boolean);
-if ('IntersectionObserver' in window) {
-  const spy = new IntersectionObserver((entries) => {
-    const visible = entries.filter((e) => e.isIntersecting)
-      .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-    if (visible[0]) setActive('#' + visible[0].target.id);
-  }, { rootMargin: '-45% 0px -50% 0px', threshold: [0, 0.1, 0.5, 1] });
-  spySections.forEach((s) => spy.observe(s));
-}
+// 左侧 TAB：子页面切换（非滚动锚点）
+document.querySelectorAll('.nav a').forEach((a) => {
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchPage(a.getAttribute('href'));
+  });
+});
+window.addEventListener('hashchange', () => switchPage(location.hash || '#overview'));
+switchPage(location.hash || '#overview');
 
 loadConfig().catch(() => {});
 syncAliveThresholdInputs();

@@ -15,6 +15,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.db import get_conn, init_db
+from backend.main import (
+    account_line,
+    is_export_alive,
+    is_min_registered_days,
+    split_export_quota,
+)
 from backend.services import jobs, locks, protocols, remote_pool
 
 
@@ -103,6 +109,55 @@ class TestLocks(unittest.TestCase):
             t.join()
         self.assertEqual(sum(held), 1)
         self.assertFalse(locks.is_locked(99902))
+
+
+class TestExportHelpers(unittest.TestCase):
+    def test_split_quota_all_odd_even(self):
+        self.assertEqual(split_export_quota(11, "all"), {"outlook.com": 6, "hotmail.com": 5})
+        self.assertEqual(split_export_quota(10, "all"), {"outlook.com": 5, "hotmail.com": 5})
+        self.assertEqual(split_export_quota(1, "all"), {"outlook.com": 1, "hotmail.com": 0})
+        self.assertEqual(split_export_quota(5, "outlook.com"), {"outlook.com": 5, "hotmail.com": 0})
+        self.assertEqual(split_export_quota(5, "hotmail.com"), {"outlook.com": 0, "hotmail.com": 5})
+
+    def test_export_alive_excludes_banned(self):
+        self.assertFalse(
+            is_export_alive(
+                {"health_status": "banned", "health_severity": "banned", "graph_status": "ok"}
+            )
+        )
+        self.assertTrue(
+            is_export_alive(
+                {
+                    "health_status": "all",
+                    "health_severity": "ok",
+                    "graph_status": "ok",
+                    "imap_status": "",
+                    "pop_status": "",
+                }
+            )
+        )
+
+    def test_min_registered_days(self):
+        from datetime import datetime, timedelta
+
+        old = (datetime.now() - timedelta(days=10)).isoformat()
+        new = (datetime.now() - timedelta(days=1)).isoformat()
+        self.assertTrue(is_min_registered_days({"registered_at": old}, 7))
+        self.assertFalse(is_min_registered_days({"registered_at": new}, 7))
+        self.assertTrue(is_min_registered_days({"registered_at": new}, 0))
+        self.assertFalse(is_min_registered_days({"registered_at": "", "created_at": ""}, 7))
+
+    def test_account_line_no_reason_suffix(self):
+        line = account_line(
+            {
+                "email": "a@outlook.com",
+                "password": "p",
+                "client_id": "c",
+                "refresh_token": "r",
+            }
+        )
+        self.assertEqual(line, "a@outlook.com----p----c----r")
+        self.assertNotIn("#", line)
 
 
 class TestJobs(unittest.TestCase):

@@ -43,7 +43,7 @@ copy config.example.json config.json
 # cp config.example.json config.json
 ```
 
-2. 按需修改 `config.json`：代理、远程池地址/密码、临时邮箱、协议测试收件人等。
+2. 按需修改 `config.json`：代理、远程池地址/密码、域名分组 ID、临时邮箱、协议测试收件人等。**仓库与示例里不包含真实密钥、邮箱或分组号。**
 
 3. 启动：
 
@@ -116,19 +116,19 @@ OutlookManage/
   "proxy": { "url": "http://127.0.0.1:7890" },
   "database": { "path": "data/accounts.db" },
   "remote": {
-    "base_url": "https://your-remote-outlook-pool.example",
-    "password": "CHANGE_ME_REMOTE_PASSWORD",
-    "group_map": { "outlook.com": 3, "hotmail.com": 8 },
+    "base_url": "",
+    "password": "",
+    "group_map": { "outlook.com": 0, "hotmail.com": 0 },
     "skip_unmapped": true,
-    "default_group_id": 9,
+    "default_group_id": 0,
     "provider": "outlook",
     "account_format": "client_id_refresh_token"
   },
   "server": { "host": "127.0.0.1", "port": 18080 },
   "temp_mail": {
-    "base_url": "https://your-tempmail.example",
-    "domain": "your-tempmail.example",
-    "admin_password": "CHANGE_ME_TEMPMAIL_ADMIN",
+    "base_url": "",
+    "domain": "",
+    "admin_password": "",
     "site_password": ""
   },
   "recovery": {
@@ -140,7 +140,7 @@ OutlookManage/
     "mail_poll_timeout_sec": 180,
     "mail_poll_interval_sec": 5
   },
-  "protocol_test": { "external_recipient": "you@example.com" },
+  "protocol_test": { "external_recipient": "" },
   "ui": { "title": "Outlook Manage WebUI", "default_concurrency": 20 }
 }
 ```

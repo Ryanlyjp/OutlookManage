@@ -6,14 +6,14 @@
     "path": "data/accounts.db"
   },
   "remote": {
-    "base_url": "https://your-remote-outlook-pool.example",
-    "password": "CHANGE_ME_REMOTE_PASSWORD",
+    "base_url": "",
+    "password": "",
     "group_map": {
-      "outlook.com": 3,
-      "hotmail.com": 8
+      "outlook.com": 0,
+      "hotmail.com": 0
     },
     "skip_unmapped": true,
-    "default_group_id": 9,
+    "default_group_id": 0,
     "provider": "outlook",
     "account_format": "client_id_refresh_token"
   },
@@ -22,9 +22,9 @@
     "port": 18080
   },
   "temp_mail": {
-    "base_url": "https://your-tempmail.example",
-    "domain": "your-tempmail.example",
-    "admin_password": "CHANGE_ME_TEMPMAIL_ADMIN",
+    "base_url": "",
+    "domain": "",
+    "admin_password": "",
     "site_password": ""
   },
   "recovery": {
@@ -37,7 +37,7 @@
     "mail_poll_interval_sec": 5
   },
   "protocol_test": {
-    "external_recipient": "you@example.com"
+    "external_recipient": ""
   },
   "ui": {
     "title": "Outlook Manage WebUI",

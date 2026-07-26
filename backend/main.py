@@ -301,32 +301,148 @@ def scope_doc():
     return FileResponse(ROOT / "scope.md")
 
 
-# ---------------- 状态统计 ----------------
-@app.get("/api/status")
-def status():
-    with get_conn(DB_PATH) as conn:
-        def count(where: str = "", params: tuple = ()) -> int:
-            sql = "SELECT COUNT(*) FROM accounts" + (f" WHERE {where}" if where else "")
-            return conn.execute(sql, params).fetchone()[0]
+# ---------------- 状态统计（DB 缓存，启动秒开） ----------------
+_stats_lock = threading.Lock()
+_stats_refresh_timer: threading.Timer | None = None
+_STATS_DEBOUNCE_SEC = 1.2
 
-        summary = {
-            "total_accounts": count(),
-            "healthy": count("graph_status='ok' OR imap_status='ok' OR pop_status='ok'"),
-            "graph_only": count("health_status='graph_only'"),
-            # 与 is_banned_row 一致：status 或 severity 任一 banned
-            "banned": count("health_status='banned' OR health_severity='banned'"),
-            "other_error": count(
-                "(health_status IN ('token_invalid','other_error') OR status='proto_error') "
-                "AND COALESCE(health_status,'') != 'banned' AND COALESCE(health_severity,'') != 'banned'"
-            ),
-            "refreshed": count("last_refresh_at != ''"),
-            "remote_ready": count("remote_sync_status IN ('imported','exists','synced')"),
-            "remote_dirty": count("remote_sync_status='dirty'"),
-            "pop_disabled": count("pop_status='disabled'"),
-            "smtp_disabled": count("smtp_status='disabled'"),
-            "imap_disabled": count("imap_status='disabled'"),
-        }
-    return {"success": True, "summary": summary, "server_time": now_local()}
+
+def _compute_stats_summary(conn) -> dict[str, Any]:
+    def count(where: str = "", params: tuple = ()) -> int:
+        sql = "SELECT COUNT(*) FROM accounts" + (f" WHERE {where}" if where else "")
+        return int(conn.execute(sql, params).fetchone()[0])
+
+    normal = count("graph_status='ok' OR imap_status='ok' OR pop_status='ok'")
+    banned = count("health_status='banned' OR health_severity='banned'")
+    untested = count(
+        "COALESCE(health_status,'')='' AND COALESCE(last_protocol_test_at,'')='' "
+        "AND COALESCE(error_detail,'')=''"
+    )
+    other_error = count(
+        "(health_status IN ('token_invalid','other_error') OR status='proto_error') "
+        "AND COALESCE(health_status,'') != 'banned' AND COALESCE(health_severity,'') != 'banned'"
+    )
+    # never_synced：正常可用且未进入远程 ready 状态
+    never_synced = count(
+        "(graph_status='ok' OR imap_status='ok' OR pop_status='ok') "
+        "AND COALESCE(remote_sync_status,'') NOT IN ('imported','exists','synced')"
+    )
+    return {
+        "total_accounts": count(),
+        "total": count(),  # 前端别名
+        "healthy": normal,
+        "normal": normal,
+        "graph_only": count("health_status='graph_only'"),
+        "banned": banned,
+        "other_error": other_error,
+        "untested": untested,
+        "graph": count("graph_status='ok'"),
+        "imap_pop": count("imap_status='ok' OR pop_status='ok'"),
+        "refreshed": count("last_refresh_at != '' AND last_refresh_at IS NOT NULL"),
+        "remote_ready": count("remote_sync_status IN ('imported','exists','synced')"),
+        "synced": count(
+            "(graph_status='ok' OR imap_status='ok' OR pop_status='ok') "
+            "AND remote_sync_status IN ('imported','exists','synced')"
+        ),
+        "remote_dirty": count("remote_sync_status='dirty'"),
+        "never_synced": never_synced,
+        "pop_disabled": count("pop_status='disabled'"),
+        "smtp_disabled": count("smtp_status='disabled'"),
+        "imap_disabled": count("imap_status='disabled'"),
+    }
+
+
+def rebuild_stats_cache() -> dict[str, Any]:
+    """全表聚合一次并写入 stats_cache，供 /api/status 快速读取。"""
+    ts = now_local()
+    with get_conn(DB_PATH) as conn:
+        summary = _compute_stats_summary(conn)
+        summary["cached_at"] = ts
+        conn.execute(
+            """
+            INSERT INTO stats_cache (id, payload, updated_at) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+            """,
+            (json.dumps(summary, ensure_ascii=False), ts),
+        )
+        conn.commit()
+    return summary
+
+
+def read_stats_cache() -> dict[str, Any] | None:
+    try:
+        with get_conn(DB_PATH) as conn:
+            row = conn.execute("SELECT payload, updated_at FROM stats_cache WHERE id=1").fetchone()
+        if not row:
+            return None
+        data = json.loads(row["payload"] or "{}")
+        if not isinstance(data, dict) or not data:
+            return None
+        data.setdefault("cached_at", row["updated_at"] or "")
+        return data
+    except Exception:
+        return None
+
+
+def schedule_stats_refresh(delay: float | None = None) -> None:
+    """账号变更后防抖刷新统计缓存（后台线程，不挡请求）。"""
+    global _stats_refresh_timer
+    wait = _STATS_DEBOUNCE_SEC if delay is None else max(0.0, float(delay))
+
+    def _run() -> None:
+        global _stats_refresh_timer
+        try:
+            rebuild_stats_cache()
+        except Exception as exc:  # noqa: BLE001
+            try:
+                log_event("STATS", f"统计缓存刷新失败：{exc}", "WARN")
+            except Exception:
+                pass
+        finally:
+            with _stats_lock:
+                _stats_refresh_timer = None
+
+    with _stats_lock:
+        if _stats_refresh_timer is not None:
+            try:
+                _stats_refresh_timer.cancel()
+            except Exception:
+                pass
+        t = threading.Timer(wait, _run)
+        t.daemon = True
+        _stats_refresh_timer = t
+        t.start()
+
+
+# 启动时预热统计缓存（空则同步算一次；已有则后台刷新）
+def _bootstrap_stats_cache() -> None:
+    cached = read_stats_cache()
+    if cached is None:
+        try:
+            rebuild_stats_cache()
+        except Exception:
+            pass
+    else:
+        schedule_stats_refresh(0.05)
+
+
+_bootstrap_stats_cache()
+
+
+@app.get("/api/status")
+def status(refresh: bool = False):
+    """优先读 DB 缓存；无缓存或 refresh=1 时现算并回写。"""
+    summary = None if refresh else read_stats_cache()
+    from_cache = summary is not None
+    if summary is None:
+        summary = rebuild_stats_cache()
+        from_cache = False
+    return {
+        "success": True,
+        "summary": summary,
+        "from_cache": from_cache,
+        "server_time": now_local(),
+    }
 
 
 _LIST_PUBLIC_COLS = (
@@ -391,39 +507,405 @@ def clear_logs():
     return {"success": True}
 
 
-@app.get("/api/accounts/export")
-def export_accounts(category: str = "valid", with_reason: bool = True):
-    """按健康状态导出账号为 txt（仅作为下载流返回，不在服务端落盘）。
-    category: valid(可用) | banned(封禁失效) | untested(未测) | all(全部) | 具体 health_status。
-    """
+# ---------------- 导出（筛选存活账号 → 下载 → 仅删除已导出） ----------------
+_export_cache: dict[str, dict[str, Any]] = {}
+_export_cache_lock = threading.Lock()
+EXPORT_CACHE_TTL_SEC = 3600
+
+
+def _parse_account_dt(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(text[:19], fmt)
+                break
+            except ValueError:
+                dt = None  # type: ignore[assignment]
+        else:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def _account_registered_dt(row: dict[str, Any] | Any) -> datetime | None:
+    getter = row.get if isinstance(row, dict) else row.__getitem__
+    return _parse_account_dt(getter("registered_at")) or _parse_account_dt(getter("created_at"))
+
+
+def _email_domain(email: str) -> str:
+    parts = str(email or "").strip().lower().rsplit("@", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def _domain_bucket(email: str) -> str:
+    d = _email_domain(email)
+    if d == "outlook.com":
+        return "outlook.com"
+    if d == "hotmail.com":
+        return "hotmail.com"
+    return ""
+
+
+def split_export_quota(count: int, domain: str) -> dict[str, int]:
+    """全部时 outlook=ceil(n/2), hotmail=floor(n/2)；单后缀时一侧为 count。"""
+    n = max(0, int(count))
+    domain = (domain or "all").strip().lower()
+    if domain in ("outlook.com", "outlook"):
+        return {"outlook.com": n, "hotmail.com": 0}
+    if domain in ("hotmail.com", "hotmail"):
+        return {"outlook.com": 0, "hotmail.com": n}
+    # all
+    return {"outlook.com": (n + 1) // 2, "hotmail.com": n // 2}
+
+
+def is_export_alive(row: dict[str, Any] | Any) -> bool:
+    """导出候选：非 banned 且 graph/imap/pop 任一 ok。"""
+    if is_banned_row(row):
+        return False
+    return is_normal_account(row)
+
+
+def is_min_registered_days(row: dict[str, Any] | Any, min_days: int, now: datetime | None = None) -> bool:
+    days = max(0, int(min_days))
+    if days <= 0:
+        return True  # 不限制注册天数
+    reg = _account_registered_dt(row)
+    if not reg:
+        return False
+    base = now or datetime.now()
+    return (base - reg).total_seconds() >= days * 86400
+
+
+def list_export_eligible(
+    domain: str,
+    min_registered_days: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """按后缀返回已排序的候选账号（注册时间升序）。"""
+    domain = (domain or "all").strip().lower()
     with get_conn(DB_PATH) as conn:
-        rows = [dict(r) for r in conn.execute("SELECT * FROM accounts ORDER BY id").fetchall()]
+        rows = [dict(r) for r in conn.execute("SELECT * FROM accounts").fetchall()]
+    now = now or datetime.now()
+    buckets: dict[str, list[dict[str, Any]]] = {"outlook.com": [], "hotmail.com": []}
+    for row in rows:
+        if not is_export_alive(row):
+            continue
+        if not is_min_registered_days(row, min_registered_days, now=now):
+            continue
+        bucket = _domain_bucket(row.get("email") or "")
+        if domain in ("outlook.com", "outlook") and bucket != "outlook.com":
+            continue
+        if domain in ("hotmail.com", "hotmail") and bucket != "hotmail.com":
+            continue
+        if domain in ("all", "", "全部") and bucket not in buckets:
+            continue
+        if bucket in buckets:
+            buckets[bucket].append(row)
 
-    def pick(r) -> bool:
-        sev, hs = r["health_severity"], r["health_status"]
-        if category == "valid":
-            return sev in ("ok", "warn")
-        if category == "banned":
-            return sev in ("banned", "fail")
-        if category == "untested":
-            return not hs
-        if category == "all":
-            return True
-        return hs == category
+    def sort_key(r: dict[str, Any]) -> tuple:
+        dt = _account_registered_dt(r) or datetime.max
+        return (dt, int(r.get("id") or 0))
 
-    selected = [r for r in rows if pick(r)]
-    lines = []
-    for r in selected:
-        line = account_line(r)
-        if with_reason and (r["ban_reason"] or r["error_detail"]):
-            line += f"  # {r['ban_reason'] or r['error_detail']}"
-        lines.append(line)
-    content = "\n".join(lines) + ("\n" if lines else "")
-    log_event("EXPORT", f"导出 {category} | {len(selected)} 个（直接下载，不落盘）")
-    return PlainTextResponse(content, headers={
-        "Content-Disposition": f'attachment; filename="export_{category}.txt"',
-        "X-Count": str(len(selected)),
-    })
+    for key in buckets:
+        buckets[key].sort(key=sort_key)
+    return buckets
+
+
+def plan_export_selection(
+    count: int,
+    domain: str,
+    min_registered_days: int,
+) -> dict[str, Any]:
+    quota = split_export_quota(count, domain)
+    buckets = list_export_eligible(domain, min_registered_days)
+    selected_outlook = buckets["outlook.com"][: quota["outlook.com"]]
+    selected_hotmail = buckets["hotmail.com"][: quota["hotmail.com"]]
+    # 合并后按注册时间全局排序输出
+    selected = selected_outlook + selected_hotmail
+    selected.sort(key=lambda r: (_account_registered_dt(r) or datetime.max, int(r.get("id") or 0)))
+    plan_total = quota["outlook.com"] + quota["hotmail.com"]
+    exported = len(selected)
+    return {
+        "quota": quota,
+        "eligible_outlook": len(buckets["outlook.com"]),
+        "eligible_hotmail": len(buckets["hotmail.com"]),
+        "eligible_total": len(buckets["outlook.com"]) + len(buckets["hotmail.com"]),
+        "plan_outlook": quota["outlook.com"],
+        "plan_hotmail": quota["hotmail.com"],
+        "plan_total": plan_total,
+        "selected": selected,
+        "selected_outlook": len(selected_outlook),
+        "selected_hotmail": len(selected_hotmail),
+        "export_count": exported,
+        "shortfall": max(0, plan_total - exported),
+    }
+
+
+def _export_cache_put(job_id: str, filename: str, content: str, account_ids: list[int]) -> None:
+    with _export_cache_lock:
+        _export_cache[job_id] = {
+            "filename": filename,
+            "content": content,
+            "account_ids": list(account_ids),
+            "created_at": time.time(),
+        }
+        # 清理过期
+        now = time.time()
+        dead = [k for k, v in _export_cache.items() if now - float(v.get("created_at") or 0) > EXPORT_CACHE_TTL_SEC]
+        for k in dead:
+            _export_cache.pop(k, None)
+
+
+def _export_cache_get(job_id: str) -> dict[str, Any] | None:
+    with _export_cache_lock:
+        item = _export_cache.get(job_id)
+        if not item:
+            return None
+        if time.time() - float(item.get("created_at") or 0) > EXPORT_CACHE_TTL_SEC:
+            _export_cache.pop(job_id, None)
+            return None
+        return item
+
+
+class ExportPayload(BaseModel):
+    count: int = 10
+    domain: str = "all"  # all | outlook.com | hotmail.com
+    min_registered_days: int = 7
+    retest: bool = True  # 默认导出前复测
+    concurrency: int | None = None
+
+
+@app.post("/api/accounts/export/preview")
+def export_preview(payload: ExportPayload):
+    if payload.count < 1:
+        raise HTTPException(status_code=400, detail="数量必须 ≥ 1")
+    if payload.min_registered_days < 0:
+        raise HTTPException(status_code=400, detail="注册满天数不能为负")
+    plan = plan_export_selection(payload.count, payload.domain, payload.min_registered_days)
+    return {
+        "success": True,
+        "count": payload.count,
+        "domain": payload.domain,
+        "min_registered_days": payload.min_registered_days,
+        "eligible_total": plan["eligible_total"],
+        "eligible_outlook": plan["eligible_outlook"],
+        "eligible_hotmail": plan["eligible_hotmail"],
+        "plan_outlook": plan["plan_outlook"],
+        "plan_hotmail": plan["plan_hotmail"],
+        "plan_total": plan["plan_total"],
+        "will_export": plan["export_count"],
+        "shortfall": plan["shortfall"],
+    }
+
+
+@app.post("/api/accounts/export/run")
+def export_run(payload: ExportPayload):
+    if payload.count < 1:
+        raise HTTPException(status_code=400, detail="数量必须 ≥ 1")
+    if payload.min_registered_days < 0:
+        raise HTTPException(status_code=400, detail="注册满天数不能为负")
+    workers = clamp_concurrency(payload.concurrency, 8)
+    plan0 = plan_export_selection(payload.count, payload.domain, payload.min_registered_days)
+    if plan0["export_count"] <= 0 and not payload.retest:
+        raise HTTPException(status_code=400, detail="没有符合条件的可导出账号")
+
+    filename = f"{time.strftime('%Y%m%d%H%M%S')}-Microsoft-mail.txt"
+    # total：预估处理量（复测时=候选上限，否则=将导出数）
+    est_total = max(1, plan0["plan_total"] if payload.retest else plan0["export_count"] or plan0["plan_total"])
+
+    def runner(progress, is_cancelled):
+        progress.set_total(est_total)
+        jobs.update_job(progress.job_id, export_phase="selecting", export_filename=filename)
+        plan = plan_export_selection(payload.count, payload.domain, payload.min_registered_days)
+        candidates = list(plan["selected"])
+        quota = plan["quota"]
+
+        if payload.retest and candidates:
+            jobs.update_job(progress.job_id, export_phase="retesting")
+            alive_rows: list[dict[str, Any]] = []
+            # 保持原排序，逐个测；取消则停止
+            for row in candidates:
+                if is_cancelled():
+                    break
+                aid = int(row["id"])
+                try:
+                    res = protocol_one(aid, job_id=progress.job_id)
+                except Exception as exc:  # noqa: BLE001
+                    res = {"status": "fail", "account_id": aid, "reason": str(exc)}
+                # 重新读库判断是否仍存活
+                try:
+                    fresh = dict(fetch_account(aid))
+                except Exception:
+                    fresh = row
+                if is_export_alive(fresh) and not is_banned_row(fresh):
+                    alive_rows.append(fresh)
+                    progress(status="ok", account_id=aid, email=fresh.get("email"), reason="复测存活")
+                else:
+                    progress(
+                        status="skip",
+                        account_id=aid,
+                        email=fresh.get("email") or row.get("email"),
+                        reason=res.get("reason") or "复测未存活/已封禁",
+                    )
+            # 按配额重新截取
+            by_domain: dict[str, list[dict[str, Any]]] = {"outlook.com": [], "hotmail.com": []}
+            for r in alive_rows:
+                b = _domain_bucket(r.get("email") or "")
+                if b in by_domain:
+                    by_domain[b].append(r)
+            for key in by_domain:
+                by_domain[key].sort(
+                    key=lambda r: (_account_registered_dt(r) or datetime.max, int(r.get("id") or 0))
+                )
+            selected = by_domain["outlook.com"][: quota["outlook.com"]] + by_domain["hotmail.com"][: quota["hotmail.com"]]
+            selected.sort(key=lambda r: (_account_registered_dt(r) or datetime.max, int(r.get("id") or 0)))
+        else:
+            selected = candidates
+
+        if is_cancelled():
+            jobs.update_job(progress.job_id, export_phase="cancelled")
+            return
+        if not selected:
+            jobs.update_job(progress.job_id, export_phase="done", error="没有可导出的存活账号")
+            return
+
+        jobs.update_job(progress.job_id, export_phase="building")
+        # 导出前再取一次密钥字段，确保与库一致
+        final_rows: list[dict[str, Any]] = []
+        for r in selected:
+            try:
+                full = dict(fetch_account(int(r["id"])))
+            except Exception:
+                continue
+            if is_banned_row(full) or not is_export_alive(full):
+                continue
+            final_rows.append(full)
+
+        lines = [account_line(r) for r in final_rows]
+        content = "\n".join(lines) + ("\n" if lines else "")
+        ids = [int(r["id"]) for r in final_rows]
+        n_out = sum(1 for r in final_rows if _domain_bucket(r.get("email") or "") == "outlook.com")
+        n_hot = sum(1 for r in final_rows if _domain_bucket(r.get("email") or "") == "hotmail.com")
+        _export_cache_put(progress.job_id, filename, content, ids)
+        jobs.update_job(
+            progress.job_id,
+            export_phase="deleting",
+            export_filename=filename,
+            export_count=len(ids),
+            export_outlook=n_out,
+            export_hotmail=n_hot,
+            export_ready=True,
+        )
+
+        # 删除：远程 + 本地（远程失败仍删本地，避免重复出货）
+        remote_fail = 0
+        if ids:
+            try:
+                session, base, csrf_token, csrf_disabled, _ = _remote_session(pool=min(8, workers + 2))
+            except Exception as exc:  # noqa: BLE001
+                session = None
+                log_event("EXPORT", f"远程会话失败，将仅删本地：{exc}", "WARN")
+
+            for r in final_rows:
+                if is_cancelled():
+                    break
+                email = r["email"]
+                aid = int(r["id"])
+                remote_ok = True
+                remote_reason = "远程已删除或未配置"
+                if session is not None:
+                    try:
+                        res = delete_account_remote(session, base, csrf_token, csrf_disabled, email)
+                        remote_ok = bool(res.get("success", False)) or res.get("http_status") in (200, 204, 404)
+                        if not remote_ok:
+                            remote_fail += 1
+                            remote_reason = f"远程失败:{res.get('error') or res.get('http_status')}"
+                        else:
+                            remote_reason = "远程已删除"
+                    except Exception as exc:  # noqa: BLE001
+                        remote_fail += 1
+                        remote_ok = False
+                        remote_reason = f"远程异常:{exc}"
+                with get_conn(DB_PATH) as conn:
+                    conn.execute("DELETE FROM accounts WHERE id=?", (aid,))
+                    conn.execute("DELETE FROM history WHERE account_id=?", (aid,))
+                    conn.commit()
+                if not payload.retest:
+                    progress(
+                        status="ok" if remote_ok else "ok",
+                        account_id=aid,
+                        email=email,
+                        reason=f"已导出并删除本地；{remote_reason}",
+                    )
+
+        jobs.update_job(
+            progress.job_id,
+            export_phase="done",
+            export_remote_failed=remote_fail,
+            export_ready=True,
+        )
+        schedule_stats_refresh(0.2)
+        log_event(
+            "EXPORT",
+            f"导出完成 file={filename} count={len(ids)} outlook={n_out} hotmail={n_hot} remote_fail={remote_fail}",
+        )
+
+    job_id = jobs.submit_custom(
+        "export",
+        est_total,
+        runner,
+        job_extra={
+            "export_filename": filename,
+            "export_ready": False,
+            "export_phase": "queued",
+            "export_count": 0,
+            "export_outlook": 0,
+            "export_hotmail": 0,
+        },
+    )
+    log_event(
+        "EXPORT",
+        f"导出任务启动 job={job_id} count={payload.count} domain={payload.domain} "
+        f"min_days={payload.min_registered_days} retest={payload.retest}",
+    )
+    return {
+        "success": True,
+        "job_id": job_id,
+        "filename": filename,
+        "plan_total": plan0["plan_total"],
+        "eligible_total": plan0["eligible_total"],
+    }
+
+
+@app.get("/api/accounts/export/download/{job_id}")
+def export_download(job_id: str):
+    item = _export_cache_get(job_id)
+    if not item:
+        # 任务可能仍在跑
+        job = jobs.get_job(job_id)
+        if job and job.get("state") == "running":
+            raise HTTPException(status_code=409, detail="导出尚未完成，请稍候")
+        raise HTTPException(status_code=404, detail="导出文件不存在或已过期，请重新导出")
+    filename = item["filename"]
+    content = item["content"]
+    log_event("EXPORT", f"下载导出文件 {filename} | job={job_id}")
+    return PlainTextResponse(
+        content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Count": str(len(item.get("account_ids") or [])),
+            "X-Export-Job": job_id,
+        },
+    )
 
 
 @app.get("/api/accounts/{account_id}/detail")
@@ -555,6 +1037,7 @@ def _do_import(text: str) -> dict[str, Any]:
                 )
                 inserted += 1
         conn.commit()
+    schedule_stats_refresh()
     log_event("IMPORT", f"导入完成 | 新增 {inserted} | 覆盖 {updated} | 错误 {len(errors)}")
     return {"success": True, "inserted": inserted, "updated": updated, "errors": errors[:50], "error_count": len(errors)}
 
@@ -645,6 +1128,7 @@ def delete_account(account_id: int, remote: bool = False):
         conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         conn.execute("DELETE FROM history WHERE account_id=?", (account_id,))
         conn.commit()
+    schedule_stats_refresh()
     log_event("ACCOUNT", f"删除账号 {row['email']} | 远程={'是' if remote else '否'}", "WARN")
     return {"success": True, "remote": remote_result}
 
@@ -672,6 +1156,7 @@ def batch_delete(payload: DeletePayload):
             conn.execute(f"DELETE FROM accounts WHERE id IN ({marks})", payload.ids)
             conn.execute(f"DELETE FROM history WHERE account_id IN ({marks})", payload.ids)
             conn.commit()
+        schedule_stats_refresh()
         log_event("ACCOUNT", f"批量删除 {len(rows)} 个账号（仅本地）", "WARN")
         return {"success": True, "deleted": len(rows), "remote": False}
 
@@ -696,6 +1181,7 @@ def batch_delete(payload: DeletePayload):
             progress(status="ok" if ok else "fail", account_id=r["id"], email=r["email"], reason=reason)
 
         run_cancellable(rows, workers, do_one, is_cancelled)
+        schedule_stats_refresh()
         log_event("ACCOUNT", f"批量删除任务{'已终止' if is_cancelled() else '完成'}（本地+远程）", "WARN")
 
     job_id = jobs.submit_custom("delete", len(rows), runner)
@@ -808,6 +1294,7 @@ def refresh_one(account_id: int) -> dict[str, Any]:
                 rotated_text = "更新 refresh_token 成功" if rotated else "更新 refresh_token 失败"
                 add_history(conn, account_id, row["email"], "refresh", "ok", rotated_text, ts)
                 conn.commit()
+                schedule_stats_refresh()
                 log_event("REFRESH", f"{row['email']} 刷新成功 | {rotated_text}")
                 post_sync = True
                 out = {
@@ -841,6 +1328,7 @@ def refresh_one(account_id: int) -> dict[str, Any]:
                 )
                 add_history(conn, account_id, row["email"], "refresh", "fail", reason, ts)
                 conn.commit()
+                schedule_stats_refresh()
                 log_event("REFRESH", f"{row['email']} 刷新失败 | {reason}", "FAIL")
                 post_delete = is_banned
                 out = {
@@ -950,6 +1438,7 @@ def protocol_one(account_id: int, job_id: str | None = None) -> dict[str, Any]:
                     )
                     add_history(conn, account_id, row["email"], "protocol", "fail", reason, ts)
                     conn.commit()
+                schedule_stats_refresh()
                 log_event("PROTO", f"{row['email']} 测试失败 | {reason}", "FAIL")
                 out = {
                     "status": "fail",
@@ -1010,6 +1499,7 @@ def protocol_one(account_id: int, job_id: str | None = None) -> dict[str, Any]:
             add_history(conn, account_id, row["email"], "protocol", hist_status,
                         health["ban_reason"] or health["error_detail"] or health["health_status"], ts)
             conn.commit()
+        schedule_stats_refresh()
         log_event(
             "PROTO",
             f"{row['email']} 测试完成 | health={health['health_status']} severity={health['health_severity']} | attempts={attempts_used}",

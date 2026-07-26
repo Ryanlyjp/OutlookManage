@@ -29,10 +29,10 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def create_job(job_type: str, total: int) -> str:
+def create_job(job_type: str, total: int, **extra: Any) -> str:
     job_id = f"{job_type}-{next(_counter)}-{int(time.time())}"
     with _jobs_lock:
-        _jobs[job_id] = {
+        job: dict[str, Any] = {
             "id": job_id,
             "type": job_type,
             "total": total,
@@ -48,8 +48,19 @@ def create_job(job_type: str, total: int) -> str:
             "items": [],
             "reasons": {},
         }
+        if extra:
+            job.update(extra)
+        _jobs[job_id] = job
         _prune_finished_jobs_locked()
     return job_id
+
+
+def update_job(job_id: str, **fields: Any) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
 
 
 def _prune_finished_jobs_locked() -> None:
@@ -229,8 +240,14 @@ def _safe_worker(worker: Callable[[Any], dict[str, Any]], item: Any, job_id: str
         }
 
 
-def submit_custom(job_type: str, total: int, runner: Callable[..., None]) -> str:
-    job_id = create_job(job_type, total)
+def submit_custom(
+    job_type: str,
+    total: int,
+    runner: Callable[..., None],
+    *,
+    job_extra: dict[str, Any] | None = None,
+) -> str:
+    job_id = create_job(job_type, total, **(job_extra or {}))
 
     def progress(status: str = "ok", **extra: Any) -> None:
         if is_cancelled(job_id) and status != "skip":
@@ -245,6 +262,7 @@ def submit_custom(job_type: str, total: int, runner: Callable[..., None]) -> str
                 job["total"] = max(0, int(value))
 
     progress.set_total = set_total
+    progress.job_id = job_id
 
     def wrapped() -> None:
         try:
