@@ -1,0 +1,14 @@
+[Unit]
+Description=Outlook Manage WebUI
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/OutlookManage
+ExecStart=/opt/OutlookManage/.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 31880 --proxy-headers
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 """后台批量任务执行器：提交一批账号 + worker 函数，立即返回 job_id，前端轮询进度。
 
-取消语义：硬取消 —— 停投递、取消未开始 future、杀协议子进程、立即标 cancelled，
+取消语义：硬取消 —— 停投递、取消未开始 future、立即标 cancelled，
 在途 worker 若稍后返回则记为 skip，且 worker 内应检查 is_cancelled 避免写库。
 """
 from __future__ import annotations
@@ -11,8 +11,6 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from itertools import count
 from typing import Any, Callable
-
-from backend.services import protocols
 
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
@@ -315,7 +313,7 @@ def _mark_remaining_skipped_locked(job: dict[str, Any]) -> None:
 
 
 def cancel(job_id: str) -> bool:
-    """硬取消：立即标 cancelled、杀协议子进程、shutdown 线程池、cancel futures。"""
+    """硬取消：立即标 cancelled、shutdown 线程池、cancel futures。"""
     with _jobs_lock:
         job = _jobs.get(job_id)
         if not job or job["state"] != "running":
@@ -326,12 +324,6 @@ def cancel(job_id: str) -> bool:
         job["finished_at"] = _now()
         # 未处理项立即记 skip，前端轮询立刻看到完整计数
         _mark_remaining_skipped_locked(job)
-
-    # 杀协议子进程（硬中断网络/探测）
-    try:
-        protocols.kill_job_procs(job_id)
-    except Exception:
-        pass
 
     with _runtime_lock:
         pool = _executors.pop(job_id, None)

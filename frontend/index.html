@@ -2,393 +2,121 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Outlook Manage WebUI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260729-3">
 </head>
 <body>
-  <div class="shell">
+  <div class="app-shell">
     <aside class="sidebar">
-      <div class="brand brand-icon-only">
-        <img class="brand-badge" src="/assets/logo.svg" alt="OM" width="40" height="40" title="Outlook Manage">
-      </div>
-      <nav class="nav">
-        <a href="#overview" class="active" data-page="overview">总览</a>
+      <div class="brand"><img src="/assets/logo.svg" alt=""><span>Graph 测活</span></div>
+      <nav>
+        <a href="#overview" data-page="overview" class="active">总览</a>
         <a href="#workspace" data-page="workspace">工作台</a>
         <a href="#accounts" data-page="accounts">账号池</a>
-        <a href="#export" data-page="export">导出</a>
-        <a href="#config" data-page="config">配置</a>
+        <a href="#settings" data-page="settings">设置</a>
         <a href="#logs" data-page="logs">日志</a>
       </nav>
-      <div class="sidebar-foot muted">导入 → 测试 → 同步 → 导出</div>
     </aside>
 
-    <main class="main">
+    <main>
       <header class="topbar">
-        <div class="topbar-spacer"></div>
-        <a class="github-link" href="https://github.com/daimon3332/OutlookManage" target="_blank" rel="noopener noreferrer" title="GitHub">
-          <svg class="github-icon" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-          <span>GitHub</span>
-        </a>
+        <div><strong>Outlook Graph 测活</strong></div>
+        <button class="btn ghost" id="logout-btn">退出</button>
       </header>
-      <section id="job-panel" class="card panel job-panel hidden page-global">
-        <div class="job-head">
-          <span id="job-title">当前任务</span>
-          <span id="job-state"></span>
-          <button class="btn sm danger" id="job-cancel-btn" style="margin-left: auto;" type="button">终止任务</button>
-        </div>
-        <div class="progress"><div class="progress-bar" id="job-bar"></div></div>
-        <div class="job-stats" id="job-stats"></div>
+
+      <section id="job-panel" class="job-panel hidden">
+        <div class="job-row"><strong>Graph 测活任务</strong><span id="job-state">运行中</span><button class="btn danger sm" id="cancel-job-btn">终止</button></div>
+        <div class="progress"><div id="job-progress"></div></div>
+        <div id="job-detail" class="muted"></div>
       </section>
 
-      <!-- 总览 -->
       <section id="overview" class="page active">
-        <div class="page-header">
-          <div>
-            <h2>总览</h2>
-            <p class="page-desc">一眼看库存健康度，并设置「存活时间 &gt; 阈值」的统计口径。</p>
-          </div>
-        </div>
-        <div class="stats-grid">
-          <div class="card stat-card accent" data-filter="all"><span>账号总数</span><strong id="stat-total">0</strong></div>
-          <div class="card stat-card ok" data-filter="normal"><span>正常可用</span><strong id="stat-normal">0</strong></div>
-          <div class="card stat-card ok" data-filter="synced"><span>已同步远程</span><strong id="stat-synced">0</strong></div>
-          <div class="card stat-card fail" data-filter="banned"><span>滥用封禁</span><strong id="stat-banned">0</strong></div>
-          <div class="card stat-card fail" data-filter="other_error"><span>其他错误</span><strong id="stat-other-error">0</strong></div>
-          <div class="card stat-card" data-filter="untested"><span>未测试</span><strong id="stat-untested">0</strong></div>
-          <div class="card stat-card ok" data-filter="graph"><span>Graph 可用</span><strong id="stat-graph">0</strong></div>
-          <div class="card stat-card ok" data-filter="imap_pop"><span>IMAP/POP 可用</span><strong id="stat-imap-pop">0</strong></div>
-        </div>
-
-        <div class="stack-vertical">
-          <div class="card panel">
-            <div class="panel-head">
-              <h3 class="section-title">存活时间阈值</h3>
-              <p>统计「存活时长超过阈值」的账号数；账号池筛选「存活时间 &gt; 阈值」共用此设置。</p>
-            </div>
-            <div class="alive-threshold-box overview-alive">
-              <div class="alive-threshold-inputs">
-                <label>年 <input type="number" id="alive-years" min="0" value="0"></label>
-                <label>月 <input type="number" id="alive-months" min="0" value="0"></label>
-                <label>天 <input type="number" id="alive-days" min="0" value="7"></label>
-                <button class="btn sm primary" id="apply-alive-threshold-btn" type="button">应用</button>
-                <button class="btn sm ghost" id="reset-alive-threshold-btn" type="button">重置为 7 天</button>
-              </div>
-              <div class="alive-threshold-result big">
-                <div class="alive-match-line">
-                  符合阈值账号：<strong id="alive-threshold-count">0</strong> 个
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card panel workflow-panel">
-            <div class="panel-head row-between">
-              <div>
-                <h3 class="section-title">推荐下一步</h3>
-                <p id="next-action-desc">根据当前账号状态给出最短操作路径。</p>
-              </div>
-              <button class="btn primary" id="next-action-btn" type="button">查看导入</button>
-            </div>
-            <div class="workflow-steps">
-              <div class="workflow-step" data-jump="#workspace"><span>1</span><strong>导入/测试</strong><small id="flow-total">0 个账号</small></div>
-              <div class="workflow-step" data-jump="#workspace"><span>2</span><strong>同步</strong><small id="flow-untested">0 个未测试</small></div>
-              <div class="workflow-step" data-jump="#accounts"><span>3</span><strong>账号池</strong><small id="flow-unsynced">0 个未上传</small></div>
-              <div class="workflow-step" data-jump="#export"><span>4</span><strong>导出</strong><small id="flow-maintain">0 个需关注</small></div>
-            </div>
-          </div>
+        <div class="page-head"><div><h1>总览</h1></div><button class="btn ghost" id="refresh-btn">刷新</button></div>
+        <div class="stats">
+          <button class="stat" data-filter="all"><span>账号总数</span><strong id="stat-total">0</strong></button>
+          <button class="stat ok" data-filter="normal"><span>正常</span><strong id="stat-normal">0</strong></button>
+          <button class="stat banned" data-filter="banned"><span>ABUSE</span><strong id="stat-banned">0</strong></button>
+          <button class="stat fail" data-filter="token_invalid"><span>Token 无效</span><strong id="stat-token-invalid">0</strong></button>
+          <button class="stat warn" data-filter="other_error"><span>其他错误</span><strong id="stat-other-error">0</strong></button>
+          <button class="stat muted-card" data-filter="untested"><span>未测试</span><strong id="stat-untested">0</strong></button>
         </div>
       </section>
 
-      <!-- 工作台：导入 + 批量任务（宽屏双栏） -->
       <section id="workspace" class="page">
-        <div class="page-header">
-          <div>
-            <h2>工作台</h2>
-            <p class="page-desc">日常流水线：导入账号 → 协议测试 / 刷新 / 同步。并发数对本页全部批量任务生效。</p>
-          </div>
-          <label class="conc-label page-conc">并发
-            <input type="number" id="concurrency" min="1" max="100">
-          </label>
-        </div>
-
+        <div class="page-head"><div><h1>工作台</h1></div></div>
         <div class="workspace-grid">
-          <div class="card panel workspace-import">
-            <div class="panel-head">
-              <h3 class="section-title section-title-import">导入账号</h3>
-              <p>格式：<code>邮箱----密码----client_id----refresh_token</code></p>
-            </div>
-            <textarea id="account-input" class="editor" spellcheck="false" placeholder="邮箱----密码----client_id----refresh_token"></textarea>
-            <div class="panel-actions">
-              <button class="btn primary" id="import-btn" type="button">导入到本地</button>
-              <button class="btn secondary" id="preview-btn" type="button">预览</button>
-              <label class="btn secondary" for="file-input">上传 txt</label>
-              <input type="file" id="file-input" accept=".txt" hidden>
-              <button class="btn ghost" id="load-default-btn" type="button">加载 oauth2.txt</button>
-              <button class="btn ghost" id="clear-btn" type="button">清空</button>
-            </div>
-            <div id="import-result" class="inline-result"></div>
-          </div>
-
-          <div class="card panel workspace-tasks">
-            <div class="panel-head">
-              <h3 class="section-title section-title-tasks">批量任务</h3>
-              <p>建议顺序：<b>测试 → 同步 → 维护</b>。</p>
-            </div>
-            <h4 class="task-group-title">推荐</h4>
-            <div class="action-tile-grid">
-              <div class="action-tile">
-                <button class="btn success" id="test-untested-btn" type="button">一键测试未测试</button>
-                <p>仅处理尚未协议测试的账号。</p>
-              </div>
-              <div class="action-tile">
-                <button class="btn success" id="sync-never-synced-btn" type="button">一键同步未上传</button>
-                <p>同步已测通且未上传远程的账号。</p>
-              </div>
-              <div class="action-tile">
-                <button class="btn secondary" id="test-missing-registration-btn" type="button">补测注册时间</button>
-                <p>补全尚未获取注册时间的账号。</p>
-              </div>
-            </div>
-            <h4 class="task-group-title">维护（全部）</h4>
-            <div class="action-tile-grid">
-              <div class="action-tile">
-                <button class="btn secondary" data-batch="protocol" data-all="1" type="button">批量协议测试</button>
-                <p>Graph / IMAP / POP / SMTP。</p>
-              </div>
-              <div class="action-tile">
-                <button class="btn secondary" data-batch="refresh" data-all="1" type="button">批量刷新 Token</button>
-                <p>成功后可自动同步远程。</p>
-              </div>
-              <div class="action-tile">
-                <button class="btn secondary" data-batch="remote-import" data-all="1" type="button">同步到远程</button>
-                <p>本地已测通账号上传远程。</p>
-              </div>
-              <div class="action-tile">
-                <button class="btn secondary" data-batch="recover-abuse" data-all="1" type="button">批量恢复 ABUSE</button>
-                <p>仅处理滥用封禁账号。</p>
-              </div>
-            </div>
-            <h4 class="task-group-title danger-text">风险操作</h4>
-            <div class="action-tile-grid compact">
-              <div class="action-tile">
-                <button class="btn danger" id="reconcile-remote-btn" type="button">校准本地与远程</button>
-                <p>上传正常号，并清理远程封禁/本地不存在账号。</p>
-              </div>
-            </div>
-          </div>
+          <article class="card">
+            <h2>导入账号</h2>
+            <p class="muted">支持 <code>client_id----refresh_token</code> 或原四段格式，每行一个。</p>
+            <textarea id="import-text" placeholder="client_id----refresh_token"></textarea>
+            <div class="actions"><button class="btn primary" id="import-btn">导入</button><button class="btn ghost" id="preview-btn">预览</button><button class="btn ghost" id="clear-import-btn">清空</button></div>
+            <pre id="import-result" class="result"></pre>
+          </article>
+          <article class="card test-card">
+            <h2>一键测试未测试</h2>
+            <p>通过 Microsoft consumers Token 端点刷新凭据，并用 Graph 读取一封邮件。</p>
+            <label>本次并发数<input id="run-concurrency" type="number" min="1" max="20" value="5"></label>
+            <button class="btn primary large" id="test-untested-btn">开始 Graph 测活</button>
+          </article>
         </div>
       </section>
 
-      <!-- 账号池 -->
-      <section id="accounts" class="page page-fill">
-        <div class="card panel full-span page-panel accounts-panel">
-          <div class="panel-head row-between">
-            <div>
-              <h3 class="section-title">账号池</h3>
-              <p>筛选、勾选、批量维护。导出请使用左侧「导出」页。</p>
-            </div>
-            <div class="toolbar">
-              <input type="search" id="search-input" placeholder="搜索邮箱…">
-              <select id="filter-select">
-                <option value="all">全部状态</option>
-                <option value="normal">正常可用</option>
-                <option value="synced">已同步远程</option>
-                <option value="graph">Graph 可用</option>
-                <option value="imap_pop">IMAP/POP 可用</option>
-                <option value="banned">滥用封禁</option>
-                <option value="other_error">其他错误</option>
-                <option value="untested">未测试</option>
-                <option value="alive_over_threshold">存活时间 &gt; 阈值</option>
-                <option value="never_synced">未上传远程</option>
-              </select>
-              <select id="domain-select">
-                <option value="">全部后缀</option>
-                <option value="outlook.com">@outlook.com</option>
-                <option value="hotmail.com">@hotmail.com</option>
-                <option value="__other__">其它后缀</option>
-              </select>
-              <button class="btn sm secondary" id="refresh-view-btn" type="button">刷新</button>
-              <button class="btn sm primary" id="goto-export-btn" type="button">去导出</button>
-            </div>
-          </div>
-          <div class="batch-bar" id="batch-bar">
-            <span id="selected-count">已选 0</span>
-            <button class="btn sm ghost" id="select-filtered-btn" type="button">全选筛选结果</button>
-            <button class="btn sm ghost" id="clear-selected-btn" type="button">清空选择</button>
-            <button class="btn sm secondary" data-batch="refresh" type="button">刷新选中</button>
-            <button class="btn sm success" data-batch="protocol" type="button">测试选中</button>
-            <button class="btn sm secondary" data-batch="recover-abuse" type="button">恢复 ABUSE</button>
-            <button class="btn sm success" data-batch="remote-import" type="button">同步选中</button>
-            <button class="btn sm danger" data-del="remote" type="button">从远程移除</button>
-            <button class="btn sm danger" data-del="both" type="button">彻底删除</button>
-          </div>
-          <div class="table-wrap accounts-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th><input type="checkbox" id="select-all" title="选中本页全部"></th>
-                  <th class="sortable" data-sort="id">ID <span class="sort-ind"></span></th>
-                  <th class="sortable" data-sort="email">Email <span class="sort-ind"></span></th>
-                  <th class="sortable" data-sort="health_status">健康 / 原因 <span class="sort-ind"></span></th>
-                  <th>协议</th>
-                  <th class="sortable" data-sort="registered_at">注册 / 存活 <span class="sort-ind"></span></th>
-                  <th class="sortable" data-sort="last_protocol_test_at">最近测试 <span class="sort-ind"></span></th>
-                  <th class="sortable" data-sort="remote_sync_status">Remote <span class="sort-ind"></span></th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody id="account-table"></tbody>
-            </table>
-          </div>
-          <div class="table-footer">
-            <div id="table-summary" class="muted"></div>
-            <div class="pager">
-              <label>每页
-                <select id="page-size">
-                  <option>20</option><option selected>50</option><option>100</option><option>200</option>
-                </select>
-              </label>
-              <button class="btn sm secondary" id="page-prev" type="button">上一页</button>
-              <span id="page-info">1 / 1</span>
-              <button class="btn sm secondary" id="page-next" type="button">下一页</button>
-            </div>
-          </div>
+      <section id="accounts" class="page">
+        <div class="page-head"><div><h1>账号池</h1></div><div class="filters"><input id="search" placeholder="搜索邮箱 / Client ID"><select id="status-filter"><option value="all">全部状态</option><option value="normal">正常</option><option value="banned">ABUSE</option><option value="token_invalid">Token 无效</option><option value="other_error">其他错误</option><option value="untested">未测试</option></select></div></div>
+        <div class="batch-toolbar">
+          <span>已选 <strong id="selected-count">0</strong> 个</span>
+          <button class="btn primary" id="test-selected-btn" disabled>测试已选</button>
+          <button class="btn ghost" id="clear-selection-btn" disabled>取消选择</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th class="select-cell"><input id="select-all" type="checkbox" aria-label="全选当前结果"></th><th>账号</th><th>状态</th><th>最近测试</th><th>说明</th><th class="operation-head">操作</th></tr></thead>
+            <tbody id="account-body"></tbody>
+          </table>
+          <div id="empty-state" class="empty hidden">没有匹配的账号</div>
         </div>
       </section>
 
-      <!-- 导出（独立页） -->
-      <section id="export" class="page">
-        <div class="page-header">
-          <div>
-            <h2 class="page-title-export">导出</h2>
-            <p class="page-desc page-desc-warn"><b>成功导出的账号会从本地与远程删除</b>，请确认数量与后缀后再操作。</p>
-          </div>
-        </div>
-        <div class="card panel export-panel">
-          <div class="export-form export-form-wide">
-            <label class="field-label">数量
-              <input type="number" id="export-count" min="1" value="10">
-            </label>
-            <label class="field-label">邮箱后缀
-              <select id="export-domain">
-                <option value="all" selected>全部（outlook/hotmail 均分，奇数时 outlook 多 1）</option>
-                <option value="outlook.com">仅 @outlook.com</option>
-                <option value="hotmail.com">仅 @hotmail.com</option>
-              </select>
-            </label>
-            <label class="field-label">注册满 N 天仍存活
-              <select id="export-days-preset">
-                <option value="0">不限制</option>
-                <option value="7" selected>7 天</option>
-                <option value="30">30 天</option>
-                <option value="custom">自定义…</option>
-              </select>
-            </label>
-            <label id="export-days-custom-wrap" class="field-label hidden">自定义天数
-              <input type="number" id="export-days-custom" min="0" value="14">
-            </label>
-            <label class="switch export-retest field-label">
-              <input type="checkbox" id="export-retest" checked> <b>导出前复测</b>（默认开启，只导出仍存活的账号）
-            </label>
-          </div>
-          <div class="export-tips">
-            <ul>
-              <li>不导出 ABUSE / banned 账号。</li>
-              <li>「全部」时两侧尽量均分；奇数个时 outlook 多 1；一侧不足不跨后缀补齐。</li>
-              <li>仅成功写入下载文件的账号会删除本地与远程。</li>
-              <li>文件名：<code>{时间戳}-Microsoft-mail.txt</code> · 行格式：<code>邮箱----密码----client_id----refresh_token</code></li>
-            </ul>
-          </div>
-          <div class="panel-actions export-actions">
-            <button class="btn primary btn-lg" id="export-confirm-btn" type="button">确认导出并下载</button>
-          </div>
+      <section id="settings" class="page">
+        <div class="page-head"><div><h1>设置</h1></div></div>
+        <div class="settings-grid">
+          <article class="card">
+            <h2>Graph 测活</h2>
+            <label>HTTP 代理<input id="cfg-proxy" placeholder="http://127.0.0.1:2323"></label>
+            <label>默认并发数<input id="cfg-concurrency" type="number" min="1" max="20"></label>
+            <button class="btn primary" id="save-settings-btn">保存设置</button>
+          </article>
+          <article class="card">
+            <h2>访问密码</h2>
+            <label>当前密码<input id="current-password" type="password"></label>
+            <label>新密码（至少 12 位）<input id="new-password" type="password"></label>
+            <label>确认新密码<input id="confirm-password" type="password"></label>
+            <button class="btn ghost" id="change-password-btn">修改密码</button>
+          </article>
         </div>
       </section>
 
-      <!-- 配置：纵向分层，仅一个主保存 -->
-      <section id="config" class="page">
-        <div class="page-header">
-          <div>
-            <h2>配置</h2>
-            <p class="page-desc">代理、远程池与分组路由。修改后点底部「保存配置」立即生效。密码为明文便于核对。</p>
-          </div>
-        </div>
-        <div class="stack-vertical config-stack">
-          <div class="card panel config-block config-block-proxy">
-            <h3 class="config-block-title">协议测试 / 代理</h3>
-            <p class="config-block-desc">协议测试与部分网络请求使用的 HTTP 代理。</p>
-            <div class="config-fields">
-              <label class="field-label">代理 URL<input id="cfg-proxy" placeholder="http://127.0.0.1:7890"></label>
-              <label class="field-label">外部收件人（可选）<input id="cfg-recipient" placeholder="用于发信探测"></label>
-            </div>
-          </div>
-          <div class="card panel config-block config-block-remote">
-            <h3 class="config-block-title">远程同步 / OutlookEmail 池</h3>
-            <p class="config-block-desc">远程地址与登录密码（明文显示，请注意环境安全）。</p>
-            <div class="config-fields">
-              <label class="field-label">远程地址<input id="cfg-remote-url" placeholder="https://..."></label>
-              <label class="field-label">远程密码<input id="cfg-remote-pass" type="text" autocomplete="off"></label>
-            </div>
-          </div>
-          <div class="card panel config-block config-block-map">
-            <h3 class="config-block-title">域名 → 远程分组</h3>
-            <p class="config-block-desc">固定仅 outlook.com / hotmail.com，填入对应远程分组 ID 即可。</p>
-            <div class="map-editor">
-              <div class="map-fixed-rows">
-                <label class="map-fixed-row">
-                  <span class="map-domain-label">outlook.com</span>
-                  <span class="map-arrow">→</span>
-                  <input class="map-gid" id="map-gid-outlook" type="number" min="0" placeholder="分组 ID">
-                </label>
-                <label class="map-fixed-row">
-                  <span class="map-domain-label">hotmail.com</span>
-                  <span class="map-arrow">→</span>
-                  <input class="map-gid" id="map-gid-hotmail" type="number" min="0" placeholder="分组 ID">
-                </label>
-              </div>
-              <label class="switch"><input type="checkbox" id="cfg-skip-unmapped"> 未映射域名跳过同步</label>
-            </div>
-          </div>
-          <div class="panel-actions config-save-bar">
-            <button class="btn primary btn-lg" id="save-config-btn" type="button">保存配置</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 日志：整页铺满 -->
-      <section id="logs" class="page page-fill page-logs">
-        <div class="logs-panel">
-          <div class="logs-toolbar">
-            <div>
-              <h2 class="logs-title">运行日志</h2>
-              <p class="muted">读写 <code>logs/app.log</code></p>
-            </div>
-            <div class="log-actions">
-              <label class="switch"><input type="checkbox" id="auto-log" checked> 自动刷新</label>
-              <button class="btn sm danger" id="clear-logs-btn" type="button">清空日志</button>
-            </div>
-          </div>
-          <pre id="log-output" class="log-view log-view-full">暂无日志</pre>
-        </div>
+      <section id="logs" class="page">
+        <div class="page-head"><div><h1>日志</h1></div><button class="btn danger" id="clear-logs-btn">清空日志</button></div>
+        <pre id="log-output" class="log-output"></pre>
       </section>
     </main>
   </div>
 
-  <!-- 详情抽屉 -->
-  <div id="drawer" class="drawer hidden">
-    <div class="drawer-mask" id="drawer-mask"></div>
-    <div class="drawer-body">
-      <div class="drawer-head">
-        <h3 id="drawer-title">账号详情</h3>
-        <button class="btn ghost sm" id="drawer-close" type="button">关闭</button>
-      </div>
-      <div id="drawer-content"></div>
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h2>编辑账号</h2><button class="icon-btn" id="close-modal-btn">×</button></div>
+      <input id="edit-id" type="hidden">
+      <label>邮箱<input id="edit-email"></label>
+      <label>Client ID<input id="edit-client-id"></label>
+      <label>Refresh Token<textarea id="edit-refresh-token"></textarea></label>
+      <label>备注<input id="edit-remark"></label>
+      <div class="actions end"><button class="btn ghost" id="cancel-edit-btn">取消</button><button class="btn primary" id="save-account-btn">保存</button></div>
     </div>
   </div>
-
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js"></script>
+  <script src="/assets/app.js?v=20260729-3"></script>
 </body>
 </html>
