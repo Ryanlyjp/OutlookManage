@@ -12,6 +12,10 @@
   "auth": {
     "password_hash": "pbkdf2_sha256$310000$replace_with_random_salt$replace_with_password_hash"
   },
+  "api": {
+    "key": "replace_with_strong_api_key",
+    "key_hash": "replace_with_sha256_api_key_hash"
+  },
   "ui": {
     "title": "Outlook Graph Checker",
     "default_concurrency": 5

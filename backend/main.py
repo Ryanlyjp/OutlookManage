@@ -1,19 +1,21 @@
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.db import add_history, get_conn, init_db
+from backend import mail_service
 from backend.services import jobs, locks
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -119,6 +121,118 @@ def verify_admin_password(password: str, encoded: str) -> bool:
 
 def admin_password_hash() -> str:
     return str((get_config().get("auth") or {}).get("password_hash") or "")
+
+
+def secret_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def global_api_key_hash() -> str:
+    api_config = get_config().get("api") or {}
+    key = str(api_config.get("key") or "")
+    return secret_hash(key) if key else str(api_config.get("key_hash") or "")
+
+
+def request_api_key(request: Request) -> str:
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return request.query_params.get("api_key", "").strip()
+
+
+def require_global_api_key(request: Request) -> None:
+    supplied, expected = request_api_key(request), global_api_key_hash()
+    if not supplied or not expected or not hmac.compare_digest(secret_hash(supplied), expected):
+        raise HTTPException(401, "API Key 无效")
+
+
+def share_active(row: Any) -> bool:
+    if not row or not row["enabled"]:
+        return False
+    expires_at = str(row["expires_at"] or "")
+    return not expires_at or datetime.fromisoformat(expires_at) > datetime.now().astimezone()
+
+
+def get_share_by_page_token(page_token: str):
+    with get_conn(DB_PATH) as conn:
+        row = conn.execute("SELECT s.*,a.email FROM otp_shares s JOIN accounts a ON a.id=s.account_id WHERE s.page_token=?", (page_token,)).fetchone()
+    if not share_active(row):
+        raise HTTPException(404, "分享不存在、已停用或已过期")
+    return row
+
+
+def get_share_by_api_key(request: Request):
+    supplied = request_api_key(request)
+    if not supplied:
+        raise HTTPException(401, "分享 API Key 无效")
+    supplied_hash = secret_hash(supplied)
+    with get_conn(DB_PATH) as conn:
+        rows = conn.execute("SELECT s.*,a.email FROM otp_shares s JOIN accounts a ON a.id=s.account_id WHERE s.enabled=1").fetchall()
+    row = next((item for item in rows if hmac.compare_digest(str(item["api_key_hash"]), supplied_hash)), None)
+    if not share_active(row):
+        raise HTTPException(401, "分享 API Key 无效、已停用或已过期")
+    return row
+
+
+def resolve_mail_account(value: str) -> dict[str, Any]:
+    raw = value.strip()
+    if not raw:
+        raise HTTPException(400, "请输入邮箱或完整四段账号信息")
+    if "----" in raw:
+        try:
+            account = parse_account_line(raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not account["email"] or account["email"].endswith("@local.invalid"):
+            raise HTTPException(400, "临时读取必须提供邮箱四段格式")
+        return {**account, "id": None, "temporary": True}
+    with get_conn(DB_PATH) as conn:
+        row = conn.execute("SELECT * FROM accounts WHERE lower(email)=lower(?)", (raw,)).fetchone()
+    if not row:
+        raise HTTPException(404, "账号池中没有该邮箱")
+    return {**dict(row), "temporary": False}
+
+
+def mail_account_by_id(account_id: int) -> dict[str, Any]:
+    return {**dict(fetch_account(account_id)), "temporary": False}
+
+
+def open_mailbox(account: dict[str, Any]):
+    try:
+        session, _, new_refresh = mail_service.graph_session(account["client_id"], account["refresh_token"], proxy_url())
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if account.get("id") and new_refresh != account["refresh_token"]:
+        with get_conn(DB_PATH) as conn:
+            conn.execute("UPDATE accounts SET refresh_token=?,refresh_token_updated_at=?,updated_at=? WHERE id=?", (new_refresh, now_local(), now_local(), account["id"]))
+            conn.commit()
+    return session
+
+
+def otp_result(account: dict[str, Any]) -> dict[str, Any]:
+    session = open_mailbox(account)
+    try:
+        messages = mail_service.list_messages(session, 1)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if not messages:
+        raise HTTPException(404, "收件箱和垃圾邮件中没有邮件")
+    message = messages[0]
+    code = mail_service.extract_otp(message)
+    if not code:
+        raise HTTPException(404, "最新一封邮件未找到 OTP，邮件可能尚未收到或同步")
+    return {"otp": {"mailbox_id": account.get("id"), "full_address": account["email"], "email_id": message["id"], "code": code, "subject": message["subject"], "sender": message["sender"], "received_at": message["received_at"]}}
+
+
+def expiry_from_days(days: int) -> str:
+    if days < 0:
+        raise HTTPException(400, "有效期不能小于 0")
+    return "" if days == 0 else (datetime.now().astimezone() + timedelta(days=days)).isoformat(timespec="seconds")
+
+
+def safe_filename(value: str) -> str:
+    cleaned = re.sub(r'[\\/\r\n"]+', "_", value).strip()
+    return cleaned.encode("ascii", "ignore").decode().strip() or "attachment"
 
 
 def is_authenticated(request: Request) -> bool:
@@ -324,6 +438,24 @@ class AccountPayload(BaseModel):
 class ConfigPayload(BaseModel):
     proxy_url: str | None = None
     default_concurrency: int | None = None
+    api_key: str | None = None
+
+
+class MailPayload(BaseModel):
+    account: str
+
+
+class SharePayload(BaseModel):
+    account_id: int
+    expires_days: int = 0
+    api_key: str | None = None
+
+
+class ShareUpdatePayload(BaseModel):
+    enabled: bool | None = None
+    expires_days: int | None = None
+    api_key: str | None = None
+    regenerate_page_token: bool = False
 
 
 app = FastAPI(title="Outlook Graph Checker")
@@ -333,7 +465,8 @@ app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path in {"/login", "/api/auth/login"} or path.startswith("/assets/"):
+    public_api = path.startswith("/api/mailboxes/") or path.startswith("/api/otp-share/")
+    if path in {"/login", "/api/auth/login"} or path.startswith("/assets/") or path.startswith("/otp-share/") or public_api:
         response = await call_next(request)
     elif is_authenticated(request):
         response = await call_next(request)
@@ -358,6 +491,12 @@ def login_page(request: Request):
     if is_authenticated(request):
         return RedirectResponse("/", status_code=303)
     return FileResponse(FRONTEND_DIR / "login.html")
+
+
+@app.get("/otp-share/{page_token}")
+def share_page(page_token: str):
+    get_share_by_page_token(page_token)
+    return FileResponse(FRONTEND_DIR / "share.html")
 
 
 @app.post("/api/auth/login")
@@ -550,6 +689,25 @@ def test_selected(payload: BatchPayload):
     return {"success": True, "job_id": job_id, "total": len(existing_ids), "concurrency": concurrency}
 
 
+@app.post("/api/accounts/delete-selected")
+def delete_selected(payload: BatchPayload):
+    ids = list(dict.fromkeys(int(account_id) for account_id in (payload.ids or []) if int(account_id) > 0))
+    if not ids:
+        raise HTTPException(400, "请先选择账号")
+    marks = ",".join("?" for _ in ids)
+    with get_conn(DB_PATH) as conn:
+        existing_ids = [int(row["id"]) for row in conn.execute(
+            f"SELECT id FROM accounts WHERE id IN ({marks})", ids
+        ).fetchall()]
+        if existing_ids:
+            existing_marks = ",".join("?" for _ in existing_ids)
+            conn.execute(f"DELETE FROM history WHERE account_id IN ({existing_marks})", existing_ids)
+            conn.execute(f"DELETE FROM accounts WHERE id IN ({existing_marks})", existing_ids)
+            conn.commit()
+    log_event("ACCOUNT", f"批量删除账号 {len(existing_ids)} 个")
+    return {"success": True, "deleted": len(existing_ids)}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
     job = jobs.get_job(job_id)
@@ -571,6 +729,8 @@ def get_config_api():
     return {"success": True, "config": {
         "proxy_url": str((config.get("proxy") or {}).get("url") or ""),
         "default_concurrency": int((config.get("ui") or {}).get("default_concurrency", 5)),
+        "api_key_configured": bool((config.get("api") or {}).get("key") or (config.get("api") or {}).get("key_hash")),
+        "api_key": str((config.get("api") or {}).get("key") or ""),
     }}
 
 
@@ -583,9 +743,244 @@ def put_config(payload: ConfigPayload):
             config.setdefault("proxy", {})["url"] = payload.proxy_url.strip()
         if payload.default_concurrency is not None:
             config.setdefault("ui", {})["default_concurrency"] = clamp_concurrency(payload.default_concurrency)
+        if payload.api_key is not None:
+            if len(payload.api_key.strip()) < 24:
+                raise HTTPException(400, "API Key 至少需要 24 位")
+            config.setdefault("api", {})["key"] = payload.api_key.strip()
+            config["api"]["key_hash"] = secret_hash(payload.api_key.strip())
         save_config(config)
         CONFIG = config
     log_event("CONFIG", "配置已更新")
+    return {"success": True}
+
+
+@app.post("/api/mail/otp")
+def admin_mail_otp(payload: MailPayload):
+    return {"success": True, **otp_result(resolve_mail_account(payload.account))}
+
+
+@app.post("/api/mail/messages")
+def admin_mail_messages(payload: MailPayload):
+    account = resolve_mail_account(payload.account)
+    try:
+        messages = mail_service.list_messages(open_mailbox(account), 5)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"success": True, "mailbox": {"id": account.get("id"), "full_address": account["email"]}, "emails": messages}
+
+
+@app.post("/api/mail/messages/{message_id}/detail")
+def admin_mail_detail(message_id: str, payload: MailPayload):
+    account = resolve_mail_account(payload.account)
+    try:
+        message = mail_service.get_message(open_mailbox(account), message_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"success": True, "email": message}
+
+
+@app.post("/api/mail/messages/{message_id}/otp")
+def admin_message_otp(message_id: str, payload: MailPayload):
+    account = resolve_mail_account(payload.account)
+    try:
+        message = mail_service.get_message(open_mailbox(account), message_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    code = mail_service.extract_otp(message)
+    if not code:
+        raise HTTPException(404, "该邮件未找到 OTP")
+    return {"success": True, "otp": {"code": code, "email_id": message_id, "subject": message["subject"]}}
+
+
+@app.post("/api/mail/messages/{message_id}/attachments/{attachment_id}")
+def admin_attachment(message_id: str, attachment_id: str, payload: MailPayload):
+    account = resolve_mail_account(payload.account)
+    try:
+        content, filename, content_type = mail_service.download_attachment(open_mailbox(account), message_id, attachment_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content, media_type=content_type, headers={"Content-Disposition": f'attachment; filename="{safe_filename(filename)}"', "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/mailboxes/lookup")
+def api_mailbox_lookup(address: str, request: Request):
+    require_global_api_key(request)
+    if "----" in address:
+        raise HTTPException(400, "API 仅支持查询账号池已有邮箱")
+    account = resolve_mail_account(address)
+    return {"mailbox": {"id": account["id"], "full_address": account["email"]}}
+
+
+@app.get("/api/mailboxes/{account_id}/otp/latest")
+def api_mailbox_latest_otp(account_id: int, request: Request, format: str = "json"):
+    require_global_api_key(request)
+    result = otp_result(mail_account_by_id(account_id))
+    return PlainTextResponse(result["otp"]["code"]) if format == "text" else result
+
+
+def share_account(row: Any) -> dict[str, Any]:
+    return mail_account_by_id(int(row["account_id"]))
+
+
+@app.get("/api/otp-share/latest")
+def api_share_latest(request: Request, format: str = "json"):
+    result = otp_result(share_account(get_share_by_api_key(request)))
+    return PlainTextResponse(result["otp"]["code"]) if format == "text" else result
+
+
+@app.get("/api/otp-share/emails")
+def api_share_emails(request: Request):
+    account = share_account(get_share_by_api_key(request))
+    try:
+        emails = mail_service.list_messages(open_mailbox(account), 5)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"emails": emails}
+
+
+@app.get("/api/otp-share/emails/{message_id}")
+def api_share_email_detail(message_id: str, request: Request):
+    account = share_account(get_share_by_api_key(request))
+    try:
+        return {"email": mail_service.get_message(open_mailbox(account), message_id)}
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/otp-share/emails/{message_id}/otp")
+def api_share_email_otp(message_id: str, request: Request):
+    account = share_account(get_share_by_api_key(request))
+    try:
+        message = mail_service.get_message(open_mailbox(account), message_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    code = mail_service.extract_otp(message)
+    if not code:
+        raise HTTPException(404, "该邮件未找到 OTP")
+    return {"otp": {"code": code, "email_id": message_id}}
+
+
+@app.get("/api/otp-share/emails/{message_id}/attachments/{attachment_id}")
+def api_share_attachment(message_id: str, attachment_id: str, request: Request):
+    account = share_account(get_share_by_api_key(request))
+    try:
+        content, filename, content_type = mail_service.download_attachment(open_mailbox(account), message_id, attachment_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content, media_type=content_type, headers={"Content-Disposition": f'attachment; filename="{safe_filename(filename)}"', "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/otp-share/page/{page_token}/mailbox")
+def page_mailbox(page_token: str):
+    row = get_share_by_page_token(page_token)
+    return {"mailbox": {"full_address": row["email"]}, "expires_at": row["expires_at"]}
+
+
+@app.get("/api/otp-share/page/{page_token}/latest")
+def page_latest(page_token: str):
+    return otp_result(share_account(get_share_by_page_token(page_token)))
+
+
+@app.get("/api/otp-share/page/{page_token}/emails")
+def page_emails(page_token: str):
+    account = share_account(get_share_by_page_token(page_token))
+    try:
+        emails = mail_service.list_messages(open_mailbox(account), 5)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return {"emails": emails}
+
+
+@app.get("/api/otp-share/page/{page_token}/emails/{message_id}")
+def page_email_detail(page_token: str, message_id: str):
+    account = share_account(get_share_by_page_token(page_token))
+    try:
+        return {"email": mail_service.get_message(open_mailbox(account), message_id)}
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/api/otp-share/page/{page_token}/emails/{message_id}/otp")
+def page_email_otp(page_token: str, message_id: str):
+    account = share_account(get_share_by_page_token(page_token))
+    try:
+        message = mail_service.get_message(open_mailbox(account), message_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    code = mail_service.extract_otp(message)
+    if not code:
+        raise HTTPException(404, "该邮件未找到 OTP")
+    return {"otp": {"code": code, "email_id": message_id}}
+
+
+@app.get("/api/otp-share/page/{page_token}/emails/{message_id}/attachments/{attachment_id}")
+def page_attachment(page_token: str, message_id: str, attachment_id: str):
+    account = share_account(get_share_by_page_token(page_token))
+    try:
+        content, filename, content_type = mail_service.download_attachment(open_mailbox(account), message_id, attachment_id)
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(content, media_type=content_type, headers={"Content-Disposition": f'attachment; filename="{safe_filename(filename)}"', "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/shares")
+def list_shares():
+    with get_conn(DB_PATH) as conn:
+        rows = conn.execute("SELECT s.*,a.email FROM otp_shares s JOIN accounts a ON a.id=s.account_id ORDER BY s.id DESC").fetchall()
+    return {"success": True, "shares": [{
+        "id": row["id"], "account_id": row["account_id"], "email": row["email"], "enabled": bool(row["enabled"]),
+        "expires_at": row["expires_at"], "created_at": row["created_at"], "page_url": f"/otp-share/{row['page_token']}",
+        "otp_api": "/api/otp-share/latest", "emails_api": "/api/otp-share/emails",
+        "detail_api": "/api/otp-share/emails/{message_id}", "email_otp_api": "/api/otp-share/emails/{message_id}/otp",
+        "attachment_api": "/api/otp-share/emails/{message_id}/attachments/{attachment_id}",
+    } for row in rows]}
+
+
+@app.post("/api/shares")
+def create_share(payload: SharePayload):
+    fetch_account(payload.account_id)
+    api_key = (payload.api_key or secrets.token_urlsafe(32)).strip()
+    if len(api_key) < 24:
+        raise HTTPException(400, "分享 API Key 至少需要 24 位")
+    token, timestamp = secrets.token_urlsafe(32), now_local()
+    try:
+        with get_conn(DB_PATH) as conn:
+            cursor = conn.execute("INSERT INTO otp_shares(account_id,page_token,api_key_hash,enabled,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (payload.account_id, token, secret_hash(api_key), 1, expiry_from_days(payload.expires_days), timestamp, timestamp))
+            conn.commit()
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            raise HTTPException(400, "该邮箱已经设置分享") from exc
+        raise
+    return {"success": True, "id": cursor.lastrowid, "page_url": f"/otp-share/{token}", "api_key": api_key}
+
+
+@app.put("/api/shares/{share_id}")
+def update_share(share_id: int, payload: ShareUpdatePayload):
+    with get_conn(DB_PATH) as conn:
+        row = conn.execute("SELECT * FROM otp_shares WHERE id=?", (share_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "分享不存在")
+        enabled = int(payload.enabled) if payload.enabled is not None else row["enabled"]
+        expires_at = expiry_from_days(payload.expires_days) if payload.expires_days is not None else row["expires_at"]
+        page_token = secrets.token_urlsafe(32) if payload.regenerate_page_token else row["page_token"]
+        api_key_hash, raw_api_key = row["api_key_hash"], ""
+        if payload.api_key is not None:
+            raw_api_key = payload.api_key.strip() or secrets.token_urlsafe(32)
+            if len(raw_api_key) < 24:
+                raise HTTPException(400, "分享 API Key 至少需要 24 位")
+            api_key_hash = secret_hash(raw_api_key)
+        conn.execute("UPDATE otp_shares SET page_token=?,api_key_hash=?,enabled=?,expires_at=?,updated_at=? WHERE id=?", (page_token, api_key_hash, enabled, expires_at, now_local(), share_id))
+        conn.commit()
+    return {"success": True, "page_url": f"/otp-share/{page_token}", "api_key": raw_api_key}
+
+
+@app.delete("/api/shares/{share_id}")
+def delete_share(share_id: int):
+    with get_conn(DB_PATH) as conn:
+        cursor = conn.execute("DELETE FROM otp_shares WHERE id=?", (share_id,))
+        conn.commit()
+    if not cursor.rowcount:
+        raise HTTPException(404, "分享不存在")
     return {"success": True}
 
 

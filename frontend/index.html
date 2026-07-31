@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260729-3">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260730-otp">
 </head>
 <body>
   <div class="app-shell">
@@ -15,6 +15,7 @@
         <a href="#overview" data-page="overview" class="active">总览</a>
         <a href="#workspace" data-page="workspace">工作台</a>
         <a href="#accounts" data-page="accounts">账号池</a>
+        <a href="#mail" data-page="mail">接码</a>
         <a href="#settings" data-page="settings">设置</a>
         <a href="#logs" data-page="logs">日志</a>
       </nav>
@@ -30,6 +31,19 @@
         <div class="job-row"><strong>Graph 测活任务</strong><span id="job-state">运行中</span><button class="btn danger sm" id="cancel-job-btn">终止</button></div>
         <div class="progress"><div id="job-progress"></div></div>
         <div id="job-detail" class="muted"></div>
+      </section>
+
+      <section id="mail" class="page">
+        <div class="page-head"><div><h1>接码</h1><p class="muted">读取账号池邮箱，或临时使用完整四段账号信息。</p></div></div>
+        <article class="card mail-input-card">
+          <label>邮箱或完整账号信息<textarea id="mail-account" placeholder="user@outlook.com&#10;或：邮箱----密码----Client ID----Refresh Token"></textarea></label>
+          <div class="actions"><button class="btn primary" id="mail-otp-btn">提取 OTP</button><button class="btn ghost" id="mail-read-btn">读取最新 5 封</button></div>
+          <div id="mail-otp-result" class="otp-result hidden"></div>
+        </article>
+        <div class="mail-layout">
+          <article class="card mail-list"><h2>邮件列表</h2><div id="mail-list" class="mail-items"><p class="muted">请先读取邮件</p></div></article>
+          <article class="card mail-detail"><div id="mail-detail"><p class="muted">选择邮件查看详情</p></div></article>
+        </div>
       </section>
 
       <section id="overview" class="page active">
@@ -68,6 +82,7 @@
         <div class="batch-toolbar">
           <span>已选 <strong id="selected-count">0</strong> 个</span>
           <button class="btn primary" id="test-selected-btn" disabled>测试已选</button>
+          <button class="btn danger" id="delete-selected-btn" disabled>删除已选</button>
           <button class="btn ghost" id="clear-selection-btn" disabled>取消选择</button>
         </div>
         <div class="table-wrap">
@@ -84,7 +99,7 @@
         <div class="settings-grid">
           <article class="card">
             <h2>Graph 测活</h2>
-            <label>HTTP 代理<input id="cfg-proxy" placeholder="http://127.0.0.1:2323"></label>
+            <label>HTTP 代理<input id="cfg-proxy" placeholder="http://127.0.0.1:2323"><small class="field-help">例如：http://127.0.0.1:2323<br>留空则直连</small></label>
             <label>默认并发数<input id="cfg-concurrency" type="number" min="1" max="20"></label>
             <button class="btn primary" id="save-settings-btn">保存设置</button>
           </article>
@@ -95,7 +110,23 @@
             <label>确认新密码<input id="confirm-password" type="password"></label>
             <button class="btn ghost" id="change-password-btn">修改密码</button>
           </article>
+          <article class="card">
+            <h2>全局 API Key</h2>
+            <p class="muted">用于 TempMail 兼容 API，至少 24 位。</p>
+            <label>API Key<input id="cfg-api-key" autocomplete="off"></label>
+            <div class="actions"><button class="btn ghost" id="copy-api-key-btn">复制</button><button class="btn primary" id="save-api-key-btn">保存 API Key</button></div>
+            <p id="api-key-state" class="muted"></p>
+          </article>
+          <article class="card share-manager">
+            <h2>OTP 分享</h2>
+            <label>账号池邮箱<select id="share-account"></select></label>
+            <label>有效期（天，0 为永久）<input id="share-expires" type="number" min="0" value="0"></label>
+            <label>分享 API Key（留空自动生成）<input id="share-api-key" autocomplete="off"></label>
+            <button class="btn primary" id="create-share-btn">创建分享</button>
+            <div id="share-created" class="result"></div>
+          </article>
         </div>
+        <div class="card share-list-card"><h2>已设置分享</h2><div id="share-list"></div></div>
       </section>
 
       <section id="logs" class="page">
@@ -117,6 +148,6 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260729-3"></script>
+  <script src="/assets/app.js?v=20260730-otp"></script>
 </body>
 </html>

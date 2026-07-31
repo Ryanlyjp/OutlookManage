@@ -49,6 +49,7 @@ function showPage(id) {
   $$('.page').forEach((page) => page.classList.toggle('active', page.id === id));
   $$('[data-page]').forEach((link) => link.classList.toggle('active', link.dataset.page === id));
   if (id === 'logs') loadLogs().catch((error) => toast(error.message));
+  if (id === 'settings') loadShares().catch((error) => toast(error.message));
 }
 
 function route() {
@@ -118,6 +119,7 @@ function updateSelectionControls(visibleRows = filteredAccounts()) {
   selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
   $('#selected-count').textContent = selected.size;
   $('#test-selected-btn').disabled = selected.size === 0;
+  $('#delete-selected-btn').disabled = selected.size === 0;
   $('#clear-selection-btn').disabled = selected.size === 0;
 }
 
@@ -144,6 +146,19 @@ async function startSelected() {
   const concurrency = parseInt($('#run-concurrency').value, 10) || parseInt($('#cfg-concurrency').value, 10) || 5;
   const data = await api('/api/accounts/test-selected', { method: 'POST', body: JSON.stringify({ ids: Array.from(selected), concurrency }) });
   watchJob(data.job_id);
+}
+
+async function deleteSelected() {
+  if (!selected.size) throw new Error('请先选择账号');
+  const count = selected.size;
+  if (!window.confirm(`确认永久删除已选的 ${count} 个账号及其测试历史？`)) return;
+  const data = await api('/api/accounts/delete-selected', {
+    method: 'POST',
+    body: JSON.stringify({ ids: Array.from(selected) }),
+  });
+  selected.clear();
+  toast(`已删除 ${data.deleted} 个账号`);
+  await refreshAll();
 }
 
 function watchJob(jobId) {
@@ -222,6 +237,8 @@ async function loadSettings() {
   $('#cfg-proxy').value = data.config.proxy_url || '';
   $('#cfg-concurrency').value = data.config.default_concurrency || 5;
   $('#run-concurrency').value = data.config.default_concurrency || 5;
+  $('#api-key-state').textContent = data.config.api_key_configured ? '已配置全局 API Key' : '尚未配置全局 API Key';
+  $('#cfg-api-key').value = data.config.api_key || '';
 }
 
 async function saveSettings() {
@@ -229,6 +246,114 @@ async function saveSettings() {
   await api('/api/config', { method: 'PUT', body: JSON.stringify({ proxy_url: $('#cfg-proxy').value, default_concurrency: concurrency }) });
   $('#run-concurrency').value = concurrency;
   toast('设置已保存');
+}
+
+async function saveApiKey() {
+  const key = $('#cfg-api-key').value.trim();
+  if (key.length < 24) throw new Error('API Key 至少需要 24 位');
+  await api('/api/config', { method: 'PUT', body: JSON.stringify({ api_key: key }) });
+  $('#api-key-state').textContent = '已配置全局 API Key';
+  toast('全局 API Key 已修改');
+}
+
+async function copyApiKey() {
+  const key = $('#cfg-api-key').value;
+  if (!key) throw new Error('当前没有可复制的 API Key');
+  await navigator.clipboard.writeText(key);
+  toast('全局 API Key 已复制');
+}
+
+function currentMailAccount() {
+  const value = $('#mail-account').value.trim();
+  if (!value) throw new Error('请输入邮箱或完整四段账号信息');
+  return value;
+}
+
+function renderOtp(target, otp) {
+  target.innerHTML = `<strong>${escapeHtml(otp.code)}</strong><span>${escapeHtml(otp.subject || '')}</span>`;
+  target.classList.remove('hidden');
+}
+
+function renderMailItems(target, emails, openHandler) {
+  target.innerHTML = emails.length ? emails.map((email) => `<button class="mail-item" data-id="${escapeHtml(email.id)}"><strong>${escapeHtml(email.subject)}</strong><span>${escapeHtml(email.sender)}</span><time>${escapeHtml(formatTime(email.received_at))}</time></button>`).join('') : '<p class="muted">没有邮件</p>';
+  target.querySelectorAll('.mail-item').forEach((button) => { button.onclick = () => openHandler(button.dataset.id); });
+}
+
+function renderMailDetail(target, email, otpHandler, attachmentHandler) {
+  const attachments = (email.attachments || []).filter((item) => !item.inline).map((item) => `<button class="btn ghost sm attachment-btn" data-id="${escapeHtml(item.id)}">下载 ${escapeHtml(item.filename)} (${item.size_bytes || 0} B)</button>`).join('');
+  target.innerHTML = `<div class="mail-detail-head"><h2>${escapeHtml(email.subject)}</h2><p>${escapeHtml(email.sender)} · ${escapeHtml(formatTime(email.received_at))}</p><button class="btn primary sm otp-single">提取 OTP</button></div><div class="mail-body"></div>${attachments ? `<div class="attachments"><h3>附件</h3>${attachments}</div>` : ''}`;
+  const body = target.querySelector('.mail-body');
+  if (email.body_html) {
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', '');
+    frame.srcdoc = email.body_html;
+    body.appendChild(frame);
+  } else body.innerHTML = `<pre>${escapeHtml(email.body_text || '(无正文)')}</pre>`;
+  target.querySelector('.otp-single').onclick = otpHandler;
+  target.querySelectorAll('.attachment-btn').forEach((button) => { button.onclick = () => attachmentHandler(button.dataset.id); });
+}
+
+async function mailLatestOtp() {
+  const data = await api('/api/mail/otp', { method: 'POST', body: JSON.stringify({ account: currentMailAccount() }) });
+  renderOtp($('#mail-otp-result'), data.otp);
+}
+
+async function readMail() {
+  const account = currentMailAccount();
+  const data = await api('/api/mail/messages', { method: 'POST', body: JSON.stringify({ account }) });
+  renderMailItems($('#mail-list'), data.emails, (id) => openMailDetail(id).catch((error) => toast(error.message)));
+}
+
+async function openMailDetail(id) {
+  const account = currentMailAccount();
+  const data = await api(`/api/mail/messages/${encodeURIComponent(id)}/detail`, { method: 'POST', body: JSON.stringify({ account }) });
+  renderMailDetail($('#mail-detail'), data.email,
+    () => api(`/api/mail/messages/${encodeURIComponent(id)}/otp`, { method: 'POST', body: JSON.stringify({ account }) }).then((item) => renderOtp($('#mail-otp-result'), item.otp)).catch((error) => toast(error.message)),
+    (attachmentId) => downloadAdminAttachment(id, attachmentId, account).catch((error) => toast(error.message)));
+}
+
+async function downloadAdminAttachment(messageId, attachmentId, account) {
+  const response = await fetch(`/api/mail/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account }) });
+  if (!response.ok) throw new Error((await response.json()).detail || '附件下载失败');
+  const blob = await response.blob();
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob);
+  const disposition = response.headers.get('content-disposition') || '';
+  link.download = disposition.match(/filename="([^"]+)"/)?.[1] || 'attachment'; link.click(); URL.revokeObjectURL(link.href);
+}
+
+function refreshShareAccountOptions() {
+  $('#share-account').innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
+}
+
+async function loadShares() {
+  refreshShareAccountOptions();
+  const data = await api('/api/shares');
+  $('#share-list').innerHTML = data.shares.length ? data.shares.map((share) => `<div class="share-row" data-id="${share.id}"><div><strong>${escapeHtml(share.email)}</strong><p>${share.enabled ? '启用' : '已停用'} · ${share.expires_at ? `到期 ${escapeHtml(formatTime(share.expires_at))}` : '永久'}</p><code>页面：${escapeHtml(location.origin + share.page_url)}</code><code>最新 OTP：${escapeHtml(location.origin + share.otp_api)}</code><code>邮件列表：${escapeHtml(location.origin + share.emails_api)}</code><code>邮件详情：${escapeHtml(location.origin + share.detail_api)}</code><code>单封 OTP：${escapeHtml(location.origin + share.email_otp_api)}</code><code>附件：${escapeHtml(location.origin + share.attachment_api)}</code></div><div class="share-actions"><button class="btn ghost sm" data-action="copy">复制页面链接</button><button class="btn ghost sm" data-action="toggle">${share.enabled ? '停用' : '启用'}</button><button class="btn ghost sm" data-action="regenerate">重生成链接/密钥</button><button class="btn danger sm" data-action="delete">删除</button></div></div>`).join('') : '<p class="muted">尚未设置分享</p>';
+  $('#share-list').querySelectorAll('.share-row').forEach((row) => {
+    const share = data.shares.find((item) => item.id === Number(row.dataset.id));
+    row.querySelector('[data-action="copy"]').onclick = () => navigator.clipboard.writeText(location.origin + share.page_url).then(() => toast('页面链接已复制'));
+    row.querySelector('[data-action="toggle"]').onclick = () => updateShare(share.id, { enabled: !share.enabled });
+    row.querySelector('[data-action="regenerate"]').onclick = () => updateShare(share.id, { regenerate_page_token: true, api_key: '' }, true);
+    row.querySelector('[data-action="delete"]').onclick = () => deleteShare(share.id);
+  });
+}
+
+async function createShare() {
+  const data = await api('/api/shares', { method: 'POST', body: JSON.stringify({ account_id: Number($('#share-account').value), expires_days: Number($('#share-expires').value) || 0, api_key: $('#share-api-key').value.trim() || null }) });
+  $('#share-created').textContent = `页面：${location.origin + data.page_url}\n分享 API Key（仅显示本次）：${data.api_key}`;
+  $('#share-api-key').value = '';
+  await loadShares();
+}
+
+async function updateShare(id, payload, showSecret = false) {
+  const data = await api(`/api/shares/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+  if (showSecret) $('#share-created').textContent = `新页面：${location.origin + data.page_url}\n新 API Key（仅显示本次）：${data.api_key}`;
+  await loadShares(); toast('分享已更新');
+}
+
+async function deleteShare(id) {
+  if (!window.confirm('确认删除该分享？链接和 API Key 将立即失效。')) return;
+  await api(`/api/shares/${id}`, { method: 'DELETE' }); await loadShares(); toast('分享已删除');
 }
 
 async function changePassword() {
@@ -248,6 +373,7 @@ $('#import-btn').onclick = () => importAccounts().catch((error) => toast(error.m
 $('#clear-import-btn').onclick = () => { $('#import-text').value = ''; $('#import-result').textContent = ''; };
 $('#test-untested-btn').onclick = () => startUntested().catch((error) => toast(error.message));
 $('#test-selected-btn').onclick = () => startSelected().catch((error) => toast(error.message));
+$('#delete-selected-btn').onclick = () => deleteSelected().catch((error) => toast(error.message));
 $('#clear-selection-btn').onclick = () => { selected.clear(); renderAccounts(); };
 $('#select-all').onchange = (event) => {
   filteredAccounts().forEach((account) => event.target.checked ? selected.add(account.id) : selected.delete(account.id));
@@ -274,6 +400,11 @@ $('#close-modal-btn').onclick = closeEdit;
 $('#cancel-edit-btn').onclick = closeEdit;
 $('#save-account-btn').onclick = () => saveAccount().catch((error) => toast(error.message));
 $('#save-settings-btn').onclick = () => saveSettings().catch((error) => toast(error.message));
+$('#save-api-key-btn').onclick = () => saveApiKey().catch((error) => toast(error.message));
+$('#copy-api-key-btn').onclick = () => copyApiKey().catch((error) => toast(error.message));
+$('#mail-otp-btn').onclick = () => mailLatestOtp().catch((error) => toast(error.message, 5000));
+$('#mail-read-btn').onclick = () => readMail().catch((error) => toast(error.message, 5000));
+$('#create-share-btn').onclick = () => createShare().catch((error) => toast(error.message, 5000));
 $('#change-password-btn').onclick = () => changePassword().catch((error) => toast(error.message));
 $('#clear-logs-btn').onclick = () => api('/api/logs/clear', { method: 'POST' }).then(loadLogs).catch((error) => toast(error.message));
 $('#cancel-job-btn').onclick = () => currentJob && api(`/api/jobs/${currentJob}/cancel`, { method: 'POST' }).catch((error) => toast(error.message));
@@ -281,4 +412,4 @@ $('#logout-btn').onclick = () => api('/api/auth/logout', { method: 'POST' }).fin
 $$('.stat').forEach((card) => { card.onclick = () => { $('#status-filter').value = card.dataset.filter; window.location.hash = 'accounts'; renderAccounts(); }; });
 
 route();
-Promise.all([refreshAll(), loadSettings()]).catch((error) => toast(error.message, 5000));
+Promise.all([refreshAll(), loadSettings()]).then(refreshShareAccountOptions).catch((error) => toast(error.message, 5000));

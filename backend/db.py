@@ -60,6 +60,20 @@ CREATE TABLE IF NOT EXISTS stats_cache (
 );
 """
 
+OTP_SHARES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS otp_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL UNIQUE,
+    page_token TEXT NOT NULL UNIQUE,
+    api_key_hash TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    expires_at TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_otp_shares_page_token ON otp_shares(page_token);
+"""
+
 ACCOUNTS_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_accounts_health ON accounts(health_status, health_severity);
 CREATE INDEX IF NOT EXISTS idx_accounts_graph ON accounts(graph_status);
@@ -109,6 +123,7 @@ def init_db(db_path: Path) -> None:
         conn.executescript(ACCOUNTS_SCHEMA)
         conn.executescript(HISTORY_SCHEMA)
         conn.executescript(STATS_CACHE_SCHEMA)
+        conn.executescript(OTP_SHARES_SCHEMA)
         conn.executescript(ACCOUNTS_INDEXES)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
         for column, decl in MIGRATIONS.items():

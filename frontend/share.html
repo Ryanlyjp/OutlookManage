@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Outlook OTP 分享</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=20260730-otp">
+</head>
+<body class="share-page">
+  <main class="share-shell">
+    <header class="share-head"><div><h1>Outlook 接码</h1><p id="share-mailbox" class="muted">正在加载…</p></div></header>
+    <article class="card"><div class="actions"><button class="btn primary" id="share-otp-btn">提取 OTP</button><button class="btn ghost" id="share-read-btn">读取最新 5 封</button></div><div id="share-otp-result" class="otp-result hidden"></div></article>
+    <div class="mail-layout"><article class="card mail-list"><h2>邮件列表</h2><div id="share-mail-list" class="mail-items"></div></article><article class="card mail-detail"><div id="share-mail-detail"><p class="muted">选择邮件查看详情</p></div></article></div>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/assets/share.js?v=20260730-otp"></script>
+</body>
+</html>
