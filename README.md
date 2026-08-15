@@ -15,6 +15,7 @@
 - 接码页面读取 Inbox 与 Junk Email 最新 5 封邮件、提取最新邮件 OTP、查看附件
 - TempMail 兼容的全局 OTP API
 - 固定邮箱的独立分享页面和分享级 API Key
+- 持久化定时 Graph 邮件测试，支持邮箱补全、小时级间隔、编辑、删除和简短记录
 
 项目不再包含远程账号池同步、ABUSE 自动恢复、IMAP、POP、SMTP 或账号导出。
 
@@ -39,4 +40,4 @@ cp config.example.json config.json
 | `other_error` | 代理、网络或其他 Graph 请求错误 |
 | 未测试 | 尚未执行 Graph 测活 |
 
-SQLite 继续使用原 `data/accounts.db`，启动时会自动创建 `otp_shares` 分享表，不需要清空账号。OTP API 和分享操作见 `docs/otp-api.md`。
+SQLite 继续使用原 `data/accounts.db`，启动时会自动创建分享与定时任务表，不需要清空账号。OTP API 和分享操作见 `docs/otp-api.md`，定时任务规则见 `docs/scheduled-tasks.md`。

@@ -16,6 +16,10 @@
     "key": "replace_with_strong_api_key",
     "key_hash": "replace_with_sha256_api_key_hash"
   },
+  "telegram": {
+    "bot_token": "",
+    "chat_id": ""
+  },
   "ui": {
     "title": "Outlook Graph Checker",
     "default_concurrency": 5

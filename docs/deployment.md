@@ -16,3 +16,5 @@ tailscale serve --bg http://127.0.0.1:31880
 全局 API Key 及分享级 API Key 均独立于管理密码。全局 API Key 原文保存在受保护的 `config.json` 中，供设置页查看和复制，同时保留 SHA-256 摘要用于兼容；分享级 API Key 仍只保存摘要，重新生成后旧密钥立即失效。分享页面 Token 保存在 SQLite 中，用于恢复和展示固定分享 URL。
 
 代理配置留空时 `requests.Session` 不设置 HTTP/HTTPS 代理，Graph 请求直接连接；填写时 HTTP 和 HTTPS 请求统一使用该代理。
+
+Telegram Bot Token 与 Chat ID 原文保存在受管理密码保护的 `config.json` 中，仅用于定时任务命中 BANNED 后发送通知。配置文件应保持仅服务用户可读。

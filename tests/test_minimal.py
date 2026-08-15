@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 from backend import main
 from backend import mail_service
 from backend.db import get_conn, init_db
+from backend.services import scheduler
 
 
 class TestImportParsing(unittest.TestCase):
@@ -201,6 +203,81 @@ class TestShareSchema(unittest.TestCase):
                 conn.execute("INSERT INTO otp_shares(account_id,page_token,api_key_hash,enabled,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", values)
                 with self.assertRaises(Exception):
                     conn.execute("INSERT INTO otp_shares(account_id,page_token,api_key_hash,enabled,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (cursor.lastrowid, "page-2", "hash2", 1, "", "now", "now"))
+
+
+class TestScheduledTasks(unittest.TestCase):
+    def test_interval_has_thirty_minute_minimum(self):
+        self.assertEqual(main.validate_interval_hours(0.5), 0.5)
+        with self.assertRaises(main.HTTPException):
+            main.validate_interval_hours(0.49)
+
+    def test_due_task_runs_and_records_short_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accounts.db"
+            init_db(path)
+            current = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+            with get_conn(path) as conn:
+                account_id = conn.execute("INSERT INTO accounts(email,password,client_id,refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?)", ("timer@outlook.com", "", "cid", "rt", "now", "now")).lastrowid
+                task_id = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?)", (account_id, 0.5, (current - timedelta(minutes=1)).isoformat(timespec="seconds"), "now", "now")).lastrowid
+                conn.commit()
+            calls = []
+
+            def worker(value):
+                calls.append(value)
+                return {"status": "fail", "reason": "Graph timeout"}
+
+            self.assertEqual(scheduler.run_due_once(path, worker, current), 1)
+            with get_conn(path) as conn:
+                task = conn.execute("SELECT * FROM scheduled_tasks WHERE id=?", (task_id,)).fetchone()
+                runs = conn.execute("SELECT * FROM scheduled_task_runs WHERE task_id=?", (task_id,)).fetchall()
+            self.assertEqual(calls, [account_id])
+            self.assertEqual(task["last_status"], "fail")
+            self.assertEqual(task["last_message"], "Graph timeout")
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(datetime.fromisoformat(task["next_run_at"]), current + timedelta(minutes=30))
+
+    def test_banned_stops_task_and_sends_notification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accounts.db"
+            init_db(path)
+            current = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+            with get_conn(path) as conn:
+                account_id = conn.execute("INSERT INTO accounts(email,password,client_id,refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?)", ("banned@outlook.com", "", "cid", "rt", "now", "now")).lastrowid
+                task_id = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,notify_telegram,created_at,updated_at) VALUES(?,?,?,?,?,?)", (account_id, 1, (current - timedelta(minutes=1)).isoformat(timespec="seconds"), 1, "now", "now")).lastrowid
+                conn.commit()
+            notifications = []
+            scheduler.run_due_once(path, lambda _: {"status": "fail", "health_status": "banned", "email": "banned@outlook.com", "reason": "账号已封禁"}, current, lambda result, timestamp: notifications.append((result, timestamp)))
+            with get_conn(path) as conn:
+                task = conn.execute("SELECT enabled,last_status FROM scheduled_tasks WHERE id=?", (task_id,)).fetchone()
+            self.assertEqual(task["enabled"], 0)
+            self.assertEqual(task["last_status"], "fail")
+            self.assertEqual(notifications[0][0]["email"], "banned@outlook.com")
+
+    def test_non_banned_failure_does_not_stop_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accounts.db"
+            init_db(path)
+            current = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+            with get_conn(path) as conn:
+                account_id = conn.execute("INSERT INTO accounts(email,password,client_id,refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?)", ("error@outlook.com", "", "cid", "rt", "now", "now")).lastrowid
+                task_id = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?)", (account_id, 1, (current - timedelta(minutes=1)).isoformat(timespec="seconds"), "now", "now")).lastrowid
+                conn.commit()
+            scheduler.run_due_once(path, lambda _: {"status": "fail", "health_status": "token_invalid", "reason": "Token 无效"}, current)
+            with get_conn(path) as conn:
+                enabled = conn.execute("SELECT enabled FROM scheduled_tasks WHERE id=?", (task_id,)).fetchone()[0]
+            self.assertEqual(enabled, 1)
+
+    @mock.patch("backend.main.requests.post")
+    def test_telegram_message_format(self, post):
+        post.return_value.ok = True
+        old_config = main.CONFIG
+        main.CONFIG = {**old_config, "proxy": {"url": ""}, "telegram": {"bot_token": "bot-token", "chat_id": "chat-id"}}
+        try:
+            main.telegram_notify_banned({"email": "user@outlook.com"}, "2026-08-15T12:00:00+00:00")
+        finally:
+            main.CONFIG = old_config
+        self.assertEqual(post.call_args.kwargs["json"], {"chat_id": "chat-id", "text": "user@outlook.com-banned-2026-08-15T12:00:00+00:00"})
+        self.assertIsNone(post.call_args.kwargs["proxies"])
 
 
 if __name__ == "__main__":

@@ -74,6 +74,37 @@ CREATE TABLE IF NOT EXISTS otp_shares (
 CREATE INDEX IF NOT EXISTS idx_otp_shares_page_token ON otp_shares(page_token);
 """
 
+SCHEDULED_TASKS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    interval_hours REAL NOT NULL,
+    next_run_at TEXT NOT NULL,
+    last_run_at TEXT DEFAULT '',
+    last_status TEXT DEFAULT '',
+    last_message TEXT DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    notify_telegram INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_account ON scheduled_tasks(account_id);
+CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(task_id, id DESC);
+"""
+
+SCHEDULED_TASK_MIGRATIONS = {
+    "enabled": "INTEGER NOT NULL DEFAULT 1",
+    "notify_telegram": "INTEGER NOT NULL DEFAULT 0",
+}
+
 ACCOUNTS_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_accounts_health ON accounts(health_status, health_severity);
 CREATE INDEX IF NOT EXISTS idx_accounts_graph ON accounts(graph_status);
@@ -124,6 +155,11 @@ def init_db(db_path: Path) -> None:
         conn.executescript(HISTORY_SCHEMA)
         conn.executescript(STATS_CACHE_SCHEMA)
         conn.executescript(OTP_SHARES_SCHEMA)
+        conn.executescript(SCHEDULED_TASKS_SCHEMA)
+        scheduled_columns = {row[1] for row in conn.execute("PRAGMA table_info(scheduled_tasks)").fetchall()}
+        for column, decl in SCHEDULED_TASK_MIGRATIONS.items():
+            if column not in scheduled_columns:
+                conn.execute(f"ALTER TABLE scheduled_tasks ADD COLUMN {column} {decl}")
         conn.executescript(ACCOUNTS_INDEXES)
         existing = {row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
         for column, decl in MIGRATIONS.items():

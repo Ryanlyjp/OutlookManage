@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from backend.db import add_history, get_conn, init_db
 from backend import mail_service
-from backend.services import jobs, locks
+from backend.services import jobs, locks, scheduler
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT / "frontend"
@@ -84,6 +84,26 @@ def get_config() -> dict[str, Any]:
 
 def proxy_url() -> str:
     return str((get_config().get("proxy") or {}).get("url") or "").strip()
+
+
+def telegram_notify_banned(result: dict[str, Any], timestamp: str) -> None:
+    telegram = get_config().get("telegram") or {}
+    bot_token = str(telegram.get("bot_token") or "").strip()
+    chat_id = str(telegram.get("chat_id") or "").strip()
+    if not bot_token or not chat_id:
+        raise ValueError("未配置 Bot Token 或 Chat ID")
+    proxy = proxy_url()
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": f"{result.get('email') or '未知邮箱'}-banned-{timestamp}"},
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+            timeout=HTTP_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise ValueError("Telegram 请求失败") from exc
+    if not response.ok:
+        raise ValueError(f"Telegram HTTP {response.status_code}")
 
 
 def clamp_concurrency(value: Any, default: int = 5) -> int:
@@ -439,6 +459,8 @@ class ConfigPayload(BaseModel):
     proxy_url: str | None = None
     default_concurrency: int | None = None
     api_key: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class MailPayload(BaseModel):
@@ -458,8 +480,25 @@ class ShareUpdatePayload(BaseModel):
     regenerate_page_token: bool = False
 
 
+class ScheduledTaskPayload(BaseModel):
+    account_id: int
+    interval_hours: float
+    enabled: bool = True
+    notify_telegram: bool = False
+
+
 app = FastAPI(title="Outlook Graph Checker")
 app.mount("/assets", StaticFiles(directory=FRONTEND_DIR), name="assets")
+
+
+@app.on_event("startup")
+def start_scheduler():
+    scheduler.start(DB_PATH, test_account, telegram_notify_banned)
+
+
+@app.on_event("shutdown")
+def stop_scheduler():
+    scheduler.stop()
 
 
 @app.middleware("http")
@@ -646,6 +685,11 @@ def edit_account(account_id: int, payload: AccountPayload):
 def delete_account(account_id: int):
     row = fetch_account(account_id)
     with get_conn(DB_PATH) as conn:
+        task_ids = [row["id"] for row in conn.execute("SELECT id FROM scheduled_tasks WHERE account_id=?", (account_id,)).fetchall()]
+        if task_ids:
+            marks = ",".join("?" for _ in task_ids)
+            conn.execute(f"DELETE FROM scheduled_task_runs WHERE task_id IN ({marks})", task_ids)
+        conn.execute("DELETE FROM scheduled_tasks WHERE account_id=?", (account_id,))
         conn.execute("DELETE FROM history WHERE account_id=?", (account_id,))
         conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         conn.commit()
@@ -701,6 +745,11 @@ def delete_selected(payload: BatchPayload):
         ).fetchall()]
         if existing_ids:
             existing_marks = ",".join("?" for _ in existing_ids)
+            task_ids = [row["id"] for row in conn.execute(f"SELECT id FROM scheduled_tasks WHERE account_id IN ({existing_marks})", existing_ids).fetchall()]
+            if task_ids:
+                task_marks = ",".join("?" for _ in task_ids)
+                conn.execute(f"DELETE FROM scheduled_task_runs WHERE task_id IN ({task_marks})", task_ids)
+            conn.execute(f"DELETE FROM scheduled_tasks WHERE account_id IN ({existing_marks})", existing_ids)
             conn.execute(f"DELETE FROM history WHERE account_id IN ({existing_marks})", existing_ids)
             conn.execute(f"DELETE FROM accounts WHERE id IN ({existing_marks})", existing_ids)
             conn.commit()
@@ -731,6 +780,8 @@ def get_config_api():
         "default_concurrency": int((config.get("ui") or {}).get("default_concurrency", 5)),
         "api_key_configured": bool((config.get("api") or {}).get("key") or (config.get("api") or {}).get("key_hash")),
         "api_key": str((config.get("api") or {}).get("key") or ""),
+        "telegram_bot_token": str((config.get("telegram") or {}).get("bot_token") or ""),
+        "telegram_chat_id": str((config.get("telegram") or {}).get("chat_id") or ""),
     }}
 
 
@@ -748,6 +799,10 @@ def put_config(payload: ConfigPayload):
                 raise HTTPException(400, "API Key 至少需要 24 位")
             config.setdefault("api", {})["key"] = payload.api_key.strip()
             config["api"]["key_hash"] = secret_hash(payload.api_key.strip())
+        if payload.telegram_bot_token is not None:
+            config.setdefault("telegram", {})["bot_token"] = payload.telegram_bot_token.strip()
+        if payload.telegram_chat_id is not None:
+            config.setdefault("telegram", {})["chat_id"] = payload.telegram_chat_id.strip()
         save_config(config)
         CONFIG = config
     log_event("CONFIG", "配置已更新")
@@ -981,6 +1036,61 @@ def delete_share(share_id: int):
         conn.commit()
     if not cursor.rowcount:
         raise HTTPException(404, "分享不存在")
+    return {"success": True}
+
+
+def validate_interval_hours(value: float) -> float:
+    interval = float(value)
+    if interval < 0.5:
+        raise HTTPException(400, "定时间隔最短为 0.5 小时（30 分钟）")
+    return interval
+
+
+@app.get("/api/scheduled-tasks")
+def list_scheduled_tasks():
+    with get_conn(DB_PATH) as conn:
+        rows = conn.execute("SELECT t.*,a.email FROM scheduled_tasks t JOIN accounts a ON a.id=t.account_id ORDER BY t.id DESC").fetchall()
+        tasks = []
+        for row in rows:
+            runs = [dict(item) for item in conn.execute("SELECT status,message,created_at FROM scheduled_task_runs WHERE task_id=? ORDER BY id DESC LIMIT 5", (row["id"],)).fetchall()]
+            tasks.append({**dict(row), "runs": runs})
+    return {"success": True, "tasks": tasks}
+
+
+@app.post("/api/scheduled-tasks")
+def create_scheduled_task(payload: ScheduledTaskPayload):
+    fetch_account(payload.account_id)
+    interval = validate_interval_hours(payload.interval_hours)
+    timestamp = scheduler.now_iso()
+    with get_conn(DB_PATH) as conn:
+        cursor = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,enabled,notify_telegram,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (payload.account_id, interval, scheduler.next_run_iso(interval), int(payload.enabled), int(payload.notify_telegram), timestamp, timestamp))
+        conn.commit()
+    log_event("SCHEDULE", f"创建定时测试 | account_id={payload.account_id} | 每 {interval:g} 小时")
+    return {"success": True, "id": cursor.lastrowid}
+
+
+@app.put("/api/scheduled-tasks/{task_id}")
+def update_scheduled_task(task_id: int, payload: ScheduledTaskPayload):
+    fetch_account(payload.account_id)
+    interval = validate_interval_hours(payload.interval_hours)
+    with get_conn(DB_PATH) as conn:
+        cursor = conn.execute("UPDATE scheduled_tasks SET account_id=?,interval_hours=?,next_run_at=?,enabled=?,notify_telegram=?,updated_at=? WHERE id=?", (payload.account_id, interval, scheduler.next_run_iso(interval), int(payload.enabled), int(payload.notify_telegram), scheduler.now_iso(), task_id))
+        conn.commit()
+    if not cursor.rowcount:
+        raise HTTPException(404, "定时任务不存在")
+    log_event("SCHEDULE", f"修改定时测试 | task_id={task_id} | 每 {interval:g} 小时")
+    return {"success": True}
+
+
+@app.delete("/api/scheduled-tasks/{task_id}")
+def delete_scheduled_task(task_id: int):
+    with get_conn(DB_PATH) as conn:
+        cursor = conn.execute("DELETE FROM scheduled_tasks WHERE id=?", (task_id,))
+        conn.execute("DELETE FROM scheduled_task_runs WHERE task_id=?", (task_id,))
+        conn.commit()
+    if not cursor.rowcount:
+        raise HTTPException(404, "定时任务不存在")
+    log_event("SCHEDULE", f"删除定时测试 | task_id={task_id}")
     return {"success": True}
 
 

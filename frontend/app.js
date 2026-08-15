@@ -50,6 +50,7 @@ function showPage(id) {
   $$('[data-page]').forEach((link) => link.classList.toggle('active', link.dataset.page === id));
   if (id === 'logs') loadLogs().catch((error) => toast(error.message));
   if (id === 'settings') loadShares().catch((error) => toast(error.message));
+  if (id === 'scheduled') loadScheduledTasks().catch((error) => toast(error.message));
 }
 
 function route() {
@@ -74,6 +75,7 @@ async function refreshAccounts() {
   const existing = new Set(accounts.map((account) => account.id));
   Array.from(selected).forEach((id) => { if (!existing.has(id)) selected.delete(id); });
   renderAccounts();
+  refreshScheduleAccountOptions();
 }
 
 async function refreshAll() {
@@ -239,6 +241,8 @@ async function loadSettings() {
   $('#run-concurrency').value = data.config.default_concurrency || 5;
   $('#api-key-state').textContent = data.config.api_key_configured ? '已配置全局 API Key' : '尚未配置全局 API Key';
   $('#cfg-api-key').value = data.config.api_key || '';
+  $('#cfg-tg-bot').value = data.config.telegram_bot_token || '';
+  $('#cfg-tg-chat').value = data.config.telegram_chat_id || '';
 }
 
 async function saveSettings() {
@@ -251,9 +255,9 @@ async function saveSettings() {
 async function saveApiKey() {
   const key = $('#cfg-api-key').value.trim();
   if (key.length < 24) throw new Error('API Key 至少需要 24 位');
-  await api('/api/config', { method: 'PUT', body: JSON.stringify({ api_key: key }) });
+  await api('/api/config', { method: 'PUT', body: JSON.stringify({ api_key: key, telegram_bot_token: $('#cfg-tg-bot').value, telegram_chat_id: $('#cfg-tg-chat').value }) });
   $('#api-key-state').textContent = '已配置全局 API Key';
-  toast('全局 API Key 已修改');
+  toast('全局 API 与 TG 设置已保存');
 }
 
 async function copyApiKey() {
@@ -323,6 +327,77 @@ async function downloadAdminAttachment(messageId, attachmentId, account) {
 
 function refreshShareAccountOptions() {
   $('#share-account').innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
+}
+
+function refreshScheduleAccountOptions() {
+  const options = accounts.map((account) => `<option value="${escapeHtml(account.email)}"></option>`).join('');
+  const datalist = $('#schedule-email-options');
+  if (datalist) datalist.innerHTML = options;
+  const select = $('#schedule-edit-account');
+  if (select) select.innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
+}
+
+function findScheduleAccount(email) {
+  const normalized = email.trim().toLowerCase();
+  return accounts.find((account) => account.email.toLowerCase() === normalized);
+}
+
+function scheduleStatus(status) {
+  if (status === 'ok') return '<span class="chip normal">正常</span>';
+  if (status === 'fail') return '<span class="chip other_error">异常</span>';
+  return '<span class="chip untested">待执行</span>';
+}
+
+async function loadScheduledTasks() {
+  refreshScheduleAccountOptions();
+  const data = await api('/api/scheduled-tasks');
+  $('#schedule-list').innerHTML = data.tasks.length ? data.tasks.map((task) => `<div class="schedule-row" data-id="${task.id}">
+    <div class="schedule-main"><strong>${escapeHtml(task.email)}</strong><span>${task.enabled ? `每 ${Number(task.interval_hours).toLocaleString('zh-CN')} 小时 · 下次 ${escapeHtml(formatTime(task.next_run_at))}` : '已停止'} · TG ${task.notify_telegram ? '开启' : '关闭'}</span><span>最近 ${escapeHtml(formatTime(task.last_run_at))} · ${scheduleStatus(task.last_status)} ${escapeHtml(task.last_message || '')}</span></div>
+    <div class="schedule-runs">${task.runs.length ? task.runs.map((run) => `<p><time>${escapeHtml(formatTime(run.created_at))}</time> ${run.status === 'ok' ? '正常' : '异常'} · ${escapeHtml(run.message)}</p>`).join('') : '<p class="muted">暂无执行记录</p>'}</div>
+    <div class="schedule-actions"><button class="btn ghost sm" data-action="edit">编辑</button><button class="btn danger sm" data-action="delete">删除</button></div>
+  </div>`).join('') : '<p class="muted">暂无定时任务</p>';
+  $('#schedule-list').querySelectorAll('.schedule-row').forEach((row) => {
+    const task = data.tasks.find((item) => item.id === Number(row.dataset.id));
+    row.querySelector('[data-action="edit"]').onclick = () => openScheduleEdit(task);
+    row.querySelector('[data-action="delete"]').onclick = () => deleteScheduledTask(task.id);
+  });
+}
+
+async function createScheduledTask() {
+  const account = findScheduleAccount($('#schedule-email').value);
+  if (!account) throw new Error('请从账号池提示中选择完整邮箱');
+  const interval = Number($('#schedule-hours').value);
+  if (!Number.isFinite(interval) || interval < 0.5) throw new Error('定时间隔最短为 0.5 小时');
+  await api('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify({ account_id: account.id, interval_hours: interval, enabled: true, notify_telegram: $('#schedule-notify').checked }) });
+  $('#schedule-email').value = '';
+  toast('定时任务已创建');
+  await loadScheduledTasks();
+}
+
+function openScheduleEdit(task) {
+  refreshScheduleAccountOptions();
+  $('#schedule-edit-id').value = task.id;
+  $('#schedule-edit-account').value = task.account_id;
+  $('#schedule-edit-hours').value = task.interval_hours;
+  $('#schedule-edit-notify').checked = Boolean(task.notify_telegram);
+  $('#schedule-edit-enabled').checked = Boolean(task.enabled);
+  $('#schedule-modal').classList.remove('hidden');
+}
+
+function closeScheduleEdit() { $('#schedule-modal').classList.add('hidden'); }
+
+async function saveScheduleEdit() {
+  const id = Number($('#schedule-edit-id').value);
+  const interval = Number($('#schedule-edit-hours').value);
+  if (!Number.isFinite(interval) || interval < 0.5) throw new Error('定时间隔最短为 0.5 小时');
+  await api(`/api/scheduled-tasks/${id}`, { method: 'PUT', body: JSON.stringify({ account_id: Number($('#schedule-edit-account').value), interval_hours: interval, enabled: $('#schedule-edit-enabled').checked, notify_telegram: $('#schedule-edit-notify').checked }) });
+  closeScheduleEdit(); toast('定时任务已保存'); await loadScheduledTasks();
+}
+
+async function deleteScheduledTask(id) {
+  if (!window.confirm('确认删除该定时任务及其执行记录？')) return;
+  await api(`/api/scheduled-tasks/${id}`, { method: 'DELETE' });
+  toast('定时任务已删除'); await loadScheduledTasks();
 }
 
 async function loadShares() {
@@ -405,6 +480,10 @@ $('#copy-api-key-btn').onclick = () => copyApiKey().catch((error) => toast(error
 $('#mail-otp-btn').onclick = () => mailLatestOtp().catch((error) => toast(error.message, 5000));
 $('#mail-read-btn').onclick = () => readMail().catch((error) => toast(error.message, 5000));
 $('#create-share-btn').onclick = () => createShare().catch((error) => toast(error.message, 5000));
+$('#create-schedule-btn').onclick = () => createScheduledTask().catch((error) => toast(error.message, 5000));
+$('#close-schedule-modal-btn').onclick = closeScheduleEdit;
+$('#cancel-schedule-edit-btn').onclick = closeScheduleEdit;
+$('#save-schedule-edit-btn').onclick = () => saveScheduleEdit().catch((error) => toast(error.message, 5000));
 $('#change-password-btn').onclick = () => changePassword().catch((error) => toast(error.message));
 $('#clear-logs-btn').onclick = () => api('/api/logs/clear', { method: 'POST' }).then(loadLogs).catch((error) => toast(error.message));
 $('#cancel-job-btn').onclick = () => currentJob && api(`/api/jobs/${currentJob}/cancel`, { method: 'POST' }).catch((error) => toast(error.message));

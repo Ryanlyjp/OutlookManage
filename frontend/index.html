@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260730-otp">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260815-schedule">
 </head>
 <body>
   <div class="app-shell">
@@ -16,6 +16,7 @@
         <a href="#workspace" data-page="workspace">工作台</a>
         <a href="#accounts" data-page="accounts">账号池</a>
         <a href="#mail" data-page="mail">接码</a>
+        <a href="#scheduled" data-page="scheduled">定时任务</a>
         <a href="#settings" data-page="settings">设置</a>
         <a href="#logs" data-page="logs">日志</a>
       </nav>
@@ -31,6 +32,19 @@
         <div class="job-row"><strong>Graph 测活任务</strong><span id="job-state">运行中</span><button class="btn danger sm" id="cancel-job-btn">终止</button></div>
         <div class="progress"><div id="job-progress"></div></div>
         <div id="job-detail" class="muted"></div>
+      </section>
+
+      <section id="scheduled" class="page">
+        <div class="page-head"><div><h1>定时任务</h1><p class="muted">按小时定期执行一次 Graph 邮件读取测试，最短 0.5 小时。</p></div></div>
+        <article class="card schedule-form">
+          <div class="schedule-fields">
+            <label>账号池邮箱<input id="schedule-email" list="schedule-email-options" autocomplete="off" placeholder="输入邮箱关键词后选择"><datalist id="schedule-email-options"></datalist></label>
+            <label>间隔（小时）<input id="schedule-hours" type="number" min="0.5" step="0.5" value="1"></label>
+          </div>
+          <label class="check-label"><input id="schedule-notify" type="checkbox">BANNED 时发送 TG 通知</label>
+          <button class="btn primary" id="create-schedule-btn">创建定时任务</button>
+        </article>
+        <div class="card schedule-list-card"><h2>任务列表</h2><div id="schedule-list"><p class="muted">正在加载…</p></div></div>
       </section>
 
       <section id="mail" class="page">
@@ -111,10 +125,11 @@
             <button class="btn ghost" id="change-password-btn">修改密码</button>
           </article>
           <article class="card">
-            <h2>全局 API Key</h2>
+            <h2>全局 API / TG</h2>
             <p class="muted">用于 TempMail 兼容 API，至少 24 位。</p>
             <label>API Key<input id="cfg-api-key" autocomplete="off"></label>
-            <div class="actions"><button class="btn ghost" id="copy-api-key-btn">复制</button><button class="btn primary" id="save-api-key-btn">保存 API Key</button></div>
+            <div class="compact-fields"><label>Telegram Bot Token<input id="cfg-tg-bot" autocomplete="off"></label><label>Telegram Chat ID<input id="cfg-tg-chat" autocomplete="off"></label></div>
+            <div class="actions"><button class="btn ghost" id="copy-api-key-btn">复制 API Key</button><button class="btn primary" id="save-api-key-btn">保存设置</button></div>
             <p id="api-key-state" class="muted"></p>
           </article>
           <article class="card share-manager">
@@ -147,7 +162,18 @@
       <div class="actions end"><button class="btn ghost" id="cancel-edit-btn">取消</button><button class="btn primary" id="save-account-btn">保存</button></div>
     </div>
   </div>
+  <div id="schedule-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h2>编辑定时任务</h2><button class="icon-btn" id="close-schedule-modal-btn">×</button></div>
+      <input id="schedule-edit-id" type="hidden">
+      <label>账号池邮箱<select id="schedule-edit-account"></select></label>
+      <label>间隔（小时，最短 0.5）<input id="schedule-edit-hours" type="number" min="0.5" step="0.5"></label>
+      <label class="check-label"><input id="schedule-edit-notify" type="checkbox">BANNED 时发送 TG 通知</label>
+      <label class="check-label"><input id="schedule-edit-enabled" type="checkbox">启用任务</label>
+      <div class="actions end"><button class="btn ghost" id="cancel-schedule-edit-btn">取消</button><button class="btn primary" id="save-schedule-edit-btn">保存</button></div>
+    </div>
+  </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260730-otp"></script>
+  <script src="/assets/app.js?v=20260815-schedule"></script>
 </body>
 </html>
