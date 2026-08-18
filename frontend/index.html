@@ -35,11 +35,11 @@
       </section>
 
       <section id="scheduled" class="page">
-        <div class="page-head"><div><h1>定时任务</h1><p class="muted">按小时定期执行一次 Graph 邮件读取测试，最短 0.5 小时。</p></div></div>
+        <div class="page-head"><div><h1>定时任务</h1><p class="muted">按分钟定期执行一次 Graph 邮件读取测试，最短 1 分钟。</p></div></div>
         <article class="card schedule-form">
           <div class="schedule-fields">
             <label>账号池邮箱<input id="schedule-email" list="schedule-email-options" autocomplete="off" placeholder="输入邮箱关键词后选择"><datalist id="schedule-email-options"></datalist></label>
-            <label>间隔（小时）<input id="schedule-hours" type="number" min="0.5" step="0.5" value="1"></label>
+            <label>间隔（分钟）<input id="schedule-minutes" type="number" min="1" step="1" value="30"></label>
           </div>
           <label class="check-label"><input id="schedule-notify" type="checkbox">BANNED 时发送 TG 通知</label>
           <button class="btn primary" id="create-schedule-btn">创建定时任务</button>
@@ -167,7 +167,7 @@
       <div class="modal-head"><h2>编辑定时任务</h2><button class="icon-btn" id="close-schedule-modal-btn">×</button></div>
       <input id="schedule-edit-id" type="hidden">
       <label>账号池邮箱<select id="schedule-edit-account"></select></label>
-      <label>间隔（小时，最短 0.5）<input id="schedule-edit-hours" type="number" min="0.5" step="0.5"></label>
+      <label>间隔（分钟，最短 1）<input id="schedule-edit-minutes" type="number" min="1" step="1"></label>
       <label class="check-label"><input id="schedule-edit-notify" type="checkbox">BANNED 时发送 TG 通知</label>
       <label class="check-label"><input id="schedule-edit-enabled" type="checkbox">启用任务</label>
       <div class="actions end"><button class="btn ghost" id="cancel-schedule-edit-btn">取消</button><button class="btn primary" id="save-schedule-edit-btn">保存</button></div>

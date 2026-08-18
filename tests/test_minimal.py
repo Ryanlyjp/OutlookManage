@@ -206,10 +206,14 @@ class TestShareSchema(unittest.TestCase):
 
 
 class TestScheduledTasks(unittest.TestCase):
-    def test_interval_has_thirty_minute_minimum(self):
-        self.assertEqual(main.validate_interval_hours(0.5), 0.5)
+    def test_interval_has_one_minute_minimum(self):
+        self.assertEqual(main.scheduled_interval_minutes(main.ScheduledTaskPayload(account_id=1, interval_minutes=1)), 1)
         with self.assertRaises(main.HTTPException):
-            main.validate_interval_hours(0.49)
+            main.scheduled_interval_minutes(main.ScheduledTaskPayload(account_id=1, interval_minutes=0.99))
+
+    def test_legacy_hour_interval_converts_to_minutes(self):
+        payload = main.ScheduledTaskPayload(account_id=1, interval_hours=0.5)
+        self.assertEqual(main.scheduled_interval_minutes(payload), 30)
 
     def test_due_task_runs_and_records_short_result(self):
         with tempfile.TemporaryDirectory() as directory:

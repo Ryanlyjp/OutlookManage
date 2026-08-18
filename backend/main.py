@@ -482,7 +482,8 @@ class ShareUpdatePayload(BaseModel):
 
 class ScheduledTaskPayload(BaseModel):
     account_id: int
-    interval_hours: float
+    interval_minutes: float | None = None
+    interval_hours: float | None = None
     enabled: bool = True
     notify_telegram: bool = False
 
@@ -1039,11 +1040,13 @@ def delete_share(share_id: int):
     return {"success": True}
 
 
-def validate_interval_hours(value: float) -> float:
-    interval = float(value)
-    if interval < 0.5:
-        raise HTTPException(400, "定时间隔最短为 0.5 小时（30 分钟）")
-    return interval
+def scheduled_interval_minutes(payload: ScheduledTaskPayload) -> float:
+    raw = payload.interval_minutes
+    if raw is None and payload.interval_hours is not None:
+        raw = payload.interval_hours * 60
+    if raw is None or float(raw) < 1:
+        raise HTTPException(400, "定时间隔最短为 1 分钟")
+    return float(raw)
 
 
 @app.get("/api/scheduled-tasks")
@@ -1053,32 +1056,34 @@ def list_scheduled_tasks():
         tasks = []
         for row in rows:
             runs = [dict(item) for item in conn.execute("SELECT status,message,created_at FROM scheduled_task_runs WHERE task_id=? ORDER BY id DESC LIMIT 5", (row["id"],)).fetchall()]
-            tasks.append({**dict(row), "runs": runs})
+            tasks.append({**dict(row), "interval_minutes": round(float(row["interval_hours"]) * 60, 6), "runs": runs})
     return {"success": True, "tasks": tasks}
 
 
 @app.post("/api/scheduled-tasks")
 def create_scheduled_task(payload: ScheduledTaskPayload):
     fetch_account(payload.account_id)
-    interval = validate_interval_hours(payload.interval_hours)
+    interval_minutes = scheduled_interval_minutes(payload)
+    interval_hours = interval_minutes / 60
     timestamp = scheduler.now_iso()
     with get_conn(DB_PATH) as conn:
-        cursor = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,enabled,notify_telegram,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (payload.account_id, interval, scheduler.next_run_iso(interval), int(payload.enabled), int(payload.notify_telegram), timestamp, timestamp))
+        cursor = conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,enabled,notify_telegram,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (payload.account_id, interval_hours, scheduler.next_run_iso(interval_hours), int(payload.enabled), int(payload.notify_telegram), timestamp, timestamp))
         conn.commit()
-    log_event("SCHEDULE", f"创建定时测试 | account_id={payload.account_id} | 每 {interval:g} 小时")
+    log_event("SCHEDULE", f"创建定时测试 | account_id={payload.account_id} | 每 {interval_minutes:g} 分钟")
     return {"success": True, "id": cursor.lastrowid}
 
 
 @app.put("/api/scheduled-tasks/{task_id}")
 def update_scheduled_task(task_id: int, payload: ScheduledTaskPayload):
     fetch_account(payload.account_id)
-    interval = validate_interval_hours(payload.interval_hours)
+    interval_minutes = scheduled_interval_minutes(payload)
+    interval_hours = interval_minutes / 60
     with get_conn(DB_PATH) as conn:
-        cursor = conn.execute("UPDATE scheduled_tasks SET account_id=?,interval_hours=?,next_run_at=?,enabled=?,notify_telegram=?,updated_at=? WHERE id=?", (payload.account_id, interval, scheduler.next_run_iso(interval), int(payload.enabled), int(payload.notify_telegram), scheduler.now_iso(), task_id))
+        cursor = conn.execute("UPDATE scheduled_tasks SET account_id=?,interval_hours=?,next_run_at=?,enabled=?,notify_telegram=?,updated_at=? WHERE id=?", (payload.account_id, interval_hours, scheduler.next_run_iso(interval_hours), int(payload.enabled), int(payload.notify_telegram), scheduler.now_iso(), task_id))
         conn.commit()
     if not cursor.rowcount:
         raise HTTPException(404, "定时任务不存在")
-    log_event("SCHEDULE", f"修改定时测试 | task_id={task_id} | 每 {interval:g} 小时")
+    log_event("SCHEDULE", f"修改定时测试 | task_id={task_id} | 每 {interval_minutes:g} 分钟")
     return {"success": True}
 
 
