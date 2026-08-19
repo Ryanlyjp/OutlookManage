@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260815-schedule">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260818-account-time">
 </head>
 <body>
   <div class="app-shell">
@@ -39,7 +39,7 @@
         <article class="card schedule-form">
           <div class="schedule-fields">
             <label>账号池邮箱<input id="schedule-email" list="schedule-email-options" autocomplete="off" placeholder="输入邮箱关键词后选择"><datalist id="schedule-email-options"></datalist></label>
-            <label>间隔（分钟）<input id="schedule-minutes" type="number" min="1" step="1" value="30"></label>
+            <label>间隔（分钟）<input id="schedule-minutes" type="number" min="1" step="1" value="10"></label>
           </div>
           <label class="check-label"><input id="schedule-notify" type="checkbox">BANNED 时发送 TG 通知</label>
           <button class="btn primary" id="create-schedule-btn">创建定时任务</button>
@@ -174,6 +174,6 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260815-schedule"></script>
+  <script src="/assets/app.js?v=20260818-account-time"></script>
 </body>
 </html>

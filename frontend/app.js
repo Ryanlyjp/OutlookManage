@@ -45,6 +45,17 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
 }
 
+function formatSingaporeTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Singapore', year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}/${Number(parts.month)}/${Number(parts.day)} ${parts.hour}:${parts.minute}`;
+}
+
 function showPage(id) {
   $$('.page').forEach((page) => page.classList.toggle('active', page.id === id));
   $$('[data-page]').forEach((link) => link.classList.toggle('active', link.dataset.page === id));
@@ -99,7 +110,7 @@ function renderAccounts() {
     const reason = account.ban_reason || account.error_detail || (account.health_status === 'normal' ? 'Graph 邮件读取正常' : '-');
     return `<tr class="${selected.has(account.id) ? 'selected-row' : ''}">
       <td class="select-cell"><input class="row-select" type="checkbox" data-id="${account.id}" ${selected.has(account.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(account.email)}"></td>
-      <td><div class="account-main"><strong>${escapeHtml(account.email)}</strong><small>${escapeHtml(account.client_id)}</small></div></td>
+      <td><div class="account-main"><strong>${escapeHtml(account.email)}</strong><small>添加于 ${escapeHtml(formatSingaporeTime(account.created_at))}（新加坡）</small></div></td>
       <td>${statusChip(account.health_status)}</td>
       <td class="nowrap">${escapeHtml(formatTime(account.last_protocol_test_at))}</td>
       <td><div class="reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</div></td>
