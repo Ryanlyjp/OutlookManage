@@ -363,7 +363,7 @@ async function loadScheduledTasks() {
   refreshScheduleAccountOptions();
   const data = await api('/api/scheduled-tasks');
   $('#schedule-list').innerHTML = data.tasks.length ? data.tasks.map((task) => `<div class="schedule-row" data-id="${task.id}">
-    <div class="schedule-main"><strong>${escapeHtml(task.email)}</strong><span>${task.enabled ? `每 ${Number(task.interval_minutes).toLocaleString('zh-CN')} 分钟 · 下次 ${escapeHtml(formatTime(task.next_run_at))}` : '已停止'} · TG ${task.notify_telegram ? '开启' : '关闭'}</span><span>最近 ${escapeHtml(formatTime(task.last_run_at))} · ${scheduleStatus(task.last_status)} ${escapeHtml(task.last_message || '')}</span></div>
+    <div class="schedule-main"><strong>${escapeHtml(task.email)}</strong><span>${task.enabled ? `每 ${Number(task.interval_minutes).toLocaleString('zh-CN')} 分钟 · 下次 ${escapeHtml(formatTime(task.next_run_at))}` : '已停止'} · TG ${task.notify_telegram ? '开启' : '关闭'}</span><span>添加于 ${escapeHtml(formatSingaporeTime(task.account_created_at))}</span></div>
     <div class="schedule-runs">${task.runs.length ? task.runs.map((run) => `<p><time>${escapeHtml(formatTime(run.created_at))}</time> ${run.status === 'ok' ? '正常' : '异常'} · ${escapeHtml(run.message)}</p>`).join('') : '<p class="muted">暂无执行记录</p>'}</div>
     <div class="schedule-actions"><button class="btn ghost sm" data-action="edit">编辑</button><button class="btn danger sm" data-action="delete">删除</button></div>
   </div>`).join('') : '<p class="muted">暂无定时任务</p>';

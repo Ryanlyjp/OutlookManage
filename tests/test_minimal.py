@@ -206,6 +206,22 @@ class TestShareSchema(unittest.TestCase):
 
 
 class TestScheduledTasks(unittest.TestCase):
+    def test_task_list_includes_account_created_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "accounts.db"
+            init_db(path)
+            with get_conn(path) as conn:
+                account_id = conn.execute("INSERT INTO accounts(email,password,client_id,refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?)", ("created@outlook.com", "", "cid", "rt", "2026-09-11T07:52:00+00:00", "now")).lastrowid
+                conn.execute("INSERT INTO scheduled_tasks(account_id,interval_hours,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?)", (account_id, 1, "2099-01-01T00:00:00+00:00", "now", "now"))
+                conn.commit()
+            old_path = main.DB_PATH
+            main.DB_PATH = path
+            try:
+                task = main.list_scheduled_tasks()["tasks"][0]
+            finally:
+                main.DB_PATH = old_path
+            self.assertEqual(task["account_created_at"], "2026-09-11T07:52:00+00:00")
+
     def test_interval_has_one_minute_minimum(self):
         self.assertEqual(main.scheduled_interval_minutes(main.ScheduledTaskPayload(account_id=1, interval_minutes=1)), 1)
         with self.assertRaises(main.HTTPException):

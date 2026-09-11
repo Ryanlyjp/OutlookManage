@@ -1052,7 +1052,7 @@ def scheduled_interval_minutes(payload: ScheduledTaskPayload) -> float:
 @app.get("/api/scheduled-tasks")
 def list_scheduled_tasks():
     with get_conn(DB_PATH) as conn:
-        rows = conn.execute("SELECT t.*,a.email FROM scheduled_tasks t JOIN accounts a ON a.id=t.account_id ORDER BY t.id DESC").fetchall()
+        rows = conn.execute("SELECT t.*,a.email,a.created_at AS account_created_at FROM scheduled_tasks t JOIN accounts a ON a.id=t.account_id ORDER BY t.id DESC").fetchall()
         tasks = []
         for row in rows:
             runs = [dict(item) for item in conn.execute("SELECT status,message,created_at FROM scheduled_task_runs WHERE task_id=? ORDER BY id DESC LIMIT 5", (row["id"],)).fetchall()]
