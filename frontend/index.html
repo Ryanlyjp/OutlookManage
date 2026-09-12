@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260818-account-time">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260912-inline-controls">
 </head>
 <body>
   <div class="app-shell">
@@ -38,11 +38,24 @@
         <div class="page-head"><div><h1>定时任务</h1><p class="muted">按分钟定期执行一次 Graph 邮件读取测试，最短 1 分钟。</p></div></div>
         <article class="card schedule-form">
           <div class="schedule-fields">
-            <label>账号池邮箱<input id="schedule-email" list="schedule-email-options" autocomplete="off" placeholder="输入邮箱关键词后选择"><datalist id="schedule-email-options"></datalist></label>
+            <div class="schedule-picker" id="schedule-picker">
+              <label for="schedule-search">账号池邮箱</label>
+              <div class="schedule-search-row"><input id="schedule-search" type="search" name="task-account-filter" autocomplete="off" data-lpignore="true" data-1p-ignore data-bwignore="true" spellcheck="false" placeholder="搜索并勾选账号" aria-controls="schedule-picker-panel" aria-expanded="false"><button type="button" class="btn ghost" id="schedule-picker-toggle" aria-label="展开账号选择" aria-expanded="false">▾</button></div>
+              <div id="schedule-picker-panel" class="schedule-picker-panel hidden">
+                <div class="schedule-picker-head"><span>已选择（<strong id="schedule-selected-count">0</strong>）</span><button type="button" class="btn ghost sm" id="schedule-clear">取消勾选</button></div>
+                <div id="schedule-options" class="schedule-options"></div>
+              </div>
+            </div>
             <label>间隔（分钟）<input id="schedule-minutes" type="number" min="1" step="1" value="10"></label>
+            <div class="schedule-random-group">
+              <label class="check-label"><input id="schedule-random" type="checkbox" checked>随机</label>
+              <label>范围（±分钟）<input id="schedule-range" type="number" min="0" step="1" value="1"></label>
+            </div>
+            <div class="schedule-create-actions">
+              <label class="check-label"><input id="schedule-notify" type="checkbox" checked>异常通知</label>
+              <button class="btn primary" id="create-schedule-btn">创建定时任务</button>
+            </div>
           </div>
-          <label class="check-label"><input id="schedule-notify" type="checkbox">BANNED 时发送 TG 通知</label>
-          <button class="btn primary" id="create-schedule-btn">创建定时任务</button>
         </article>
         <div class="card schedule-list-card"><h2>任务列表</h2><div id="schedule-list"><p class="muted">正在加载…</p></div></div>
       </section>
@@ -174,6 +187,6 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260911-schedule-account-time"></script>
+  <script src="/assets/app.js?v=20260912-multi-picker"></script>
 </body>
 </html>

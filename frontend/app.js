@@ -340,17 +340,32 @@ function refreshShareAccountOptions() {
   $('#share-account').innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
 }
 
+const scheduleSelected = new Set();
+
 function refreshScheduleAccountOptions() {
-  const options = accounts.map((account) => `<option value="${escapeHtml(account.email)}"></option>`).join('');
-  const datalist = $('#schedule-email-options');
-  if (datalist) datalist.innerHTML = options;
+  const existing = new Set(accounts.map((account) => account.id));
+  for (const id of scheduleSelected) if (!existing.has(id)) scheduleSelected.delete(id);
+  renderScheduleOptions();
   const select = $('#schedule-edit-account');
   if (select) select.innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
 }
 
-function findScheduleAccount(email) {
-  const normalized = email.trim().toLowerCase();
-  return accounts.find((account) => account.email.toLowerCase() === normalized);
+function renderScheduleOptions() {
+  const query = $('#schedule-search').value.trim().toLowerCase();
+  $('#schedule-selected-count').textContent = scheduleSelected.size;
+  $('#schedule-options').innerHTML = accounts.filter((account) => account.email.toLowerCase().includes(query)).map((account) =>
+    `<label title="${escapeHtml(account.email)}"><input type="checkbox" data-id="${account.id}" aria-label="${escapeHtml(account.email)}" ${scheduleSelected.has(account.id) ? 'checked' : ''}><span>${escapeHtml(account.email.slice(0, 16))}</span></label>`
+  ).join('') || '<p class="muted">没有匹配账号</p>';
+}
+
+function toggleSchedulePicker(open) {
+  $('#schedule-picker-panel').classList.toggle('hidden', !open);
+  $('#schedule-search').setAttribute('aria-expanded', String(open));
+  $('#schedule-picker-toggle').setAttribute('aria-expanded', String(open));
+}
+
+function scheduleRandomInterval(interval, range) {
+  return interval - range + Math.floor(Math.random() * (range * 2 + 1));
 }
 
 function scheduleStatus(status) {
@@ -375,14 +390,32 @@ async function loadScheduledTasks() {
 }
 
 async function createScheduledTask() {
-  const account = findScheduleAccount($('#schedule-email').value);
-  if (!account) throw new Error('请从账号池提示中选择完整邮箱');
+  if (!scheduleSelected.size) throw new Error('请先勾选账号');
   const interval = Number($('#schedule-minutes').value);
-  if (!Number.isFinite(interval) || interval < 1) throw new Error('定时间隔最短为 1 分钟');
-  await api('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify({ account_id: account.id, interval_minutes: interval, enabled: true, notify_telegram: $('#schedule-notify').checked }) });
-  $('#schedule-email').value = '';
-  toast('定时任务已创建');
-  await loadScheduledTasks();
+  const range = $('#schedule-random').checked ? Number($('#schedule-range').value) : 0;
+  if (!Number.isSafeInteger(interval) || interval < 1) throw new Error('间隔请输入至少 1 分钟的整数');
+  if (!Number.isSafeInteger(range) || range < 0 || interval - range < 1 || !Number.isSafeInteger(interval + range)) throw new Error('随机范围必须为非负整数，且最短间隔不能低于 1 分钟');
+  const notify = $('#schedule-notify').checked;
+  const ids = Array.from(scheduleSelected);
+  const button = $('#create-schedule-btn');
+  button.disabled = true;
+  let created = 0;
+  try {
+    for (const id of ids) {
+      button.textContent = `正在创建 ${created + 1}/${ids.length}`;
+      await api('/api/scheduled-tasks', { method: 'POST', body: JSON.stringify({ account_id: id, interval_minutes: scheduleRandomInterval(interval, range), enabled: true, notify_telegram: notify }) });
+      scheduleSelected.delete(id);
+      created++;
+    }
+    toast(`已创建 ${created} 个定时任务`);
+  } catch (error) {
+    throw new Error(`已创建 ${created} 个，未完成的账号保留勾选：${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = '创建定时任务';
+    renderScheduleOptions();
+    await loadScheduledTasks();
+  }
 }
 
 function openScheduleEdit(task) {
@@ -492,6 +525,21 @@ $('#mail-otp-btn').onclick = () => mailLatestOtp().catch((error) => toast(error.
 $('#mail-read-btn').onclick = () => readMail().catch((error) => toast(error.message, 5000));
 $('#create-share-btn').onclick = () => createShare().catch((error) => toast(error.message, 5000));
 $('#create-schedule-btn').onclick = () => createScheduledTask().catch((error) => toast(error.message, 5000));
+$('#schedule-search').onfocus = () => toggleSchedulePicker(true);
+$('#schedule-search').onclick = () => toggleSchedulePicker(true);
+$('#schedule-search').oninput = () => { renderScheduleOptions(); toggleSchedulePicker(true); };
+$('#schedule-picker-toggle').onclick = () => toggleSchedulePicker($('#schedule-picker-panel').classList.contains('hidden'));
+$('#schedule-clear').onclick = () => { scheduleSelected.clear(); renderScheduleOptions(); };
+$('#schedule-options').onchange = (event) => {
+  const checkbox = event.target.closest('input[data-id]');
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.id);
+  checkbox.checked ? scheduleSelected.add(id) : scheduleSelected.delete(id);
+  $('#schedule-selected-count').textContent = scheduleSelected.size;
+};
+$('#schedule-random').onchange = () => { $('#schedule-range').disabled = !$('#schedule-random').checked; };
+document.addEventListener('click', (event) => { if (!$('#schedule-picker').contains(event.target)) toggleSchedulePicker(false); });
+$('#schedule-picker').onkeydown = (event) => { if (event.key === 'Escape') toggleSchedulePicker(false); };
 $('#close-schedule-modal-btn').onclick = closeScheduleEdit;
 $('#cancel-schedule-edit-btn').onclick = closeScheduleEdit;
 $('#save-schedule-edit-btn').onclick = () => saveScheduleEdit().catch((error) => toast(error.message, 5000));
