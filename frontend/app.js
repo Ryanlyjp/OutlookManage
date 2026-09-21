@@ -336,8 +336,24 @@ async function downloadAdminAttachment(messageId, attachmentId, account) {
   link.download = disposition.match(/filename="([^"]+)"/)?.[1] || 'attachment'; link.click(); URL.revokeObjectURL(link.href);
 }
 
+const shareSelected = new Set();
+let sharedAccounts = new Set();
+
 function refreshShareAccountOptions() {
-  $('#share-account').innerHTML = accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.email)}</option>`).join('');
+  const existing = new Set(accounts.map((account) => account.id));
+  for (const id of shareSelected) if (!existing.has(id) || sharedAccounts.has(id)) shareSelected.delete(id);
+  const query = $('#share-search').value.trim().toLowerCase();
+  $('#share-selected-count').textContent = shareSelected.size;
+  $('#share-api-key').disabled = shareSelected.size > 1;
+  $('#share-options').innerHTML = accounts.filter((account) => account.email.toLowerCase().includes(query)).map((account) =>
+    `<label title="${escapeHtml(account.email)}${sharedAccounts.has(account.id) ? '（已分享）' : ''}"><input type="checkbox" data-id="${account.id}" aria-label="${escapeHtml(account.email)}" ${shareSelected.has(account.id) ? 'checked' : ''} ${sharedAccounts.has(account.id) ? 'disabled' : ''}><span>${escapeHtml(account.email.slice(0, 16))}${sharedAccounts.has(account.id) ? ' ✓' : ''}</span></label>`
+  ).join('') || '<p class="muted">没有匹配账号</p>';
+}
+
+function toggleSharePicker(open) {
+  $('#share-picker-panel').classList.toggle('hidden', !open);
+  $('#share-search').setAttribute('aria-expanded', String(open));
+  $('#share-picker-toggle').setAttribute('aria-expanded', String(open));
 }
 
 const scheduleSelected = new Set();
@@ -445,8 +461,9 @@ async function deleteScheduledTask(id) {
 }
 
 async function loadShares() {
-  refreshShareAccountOptions();
   const data = await api('/api/shares');
+  sharedAccounts = new Set(data.shares.map((share) => share.account_id));
+  refreshShareAccountOptions();
   $('#share-list').innerHTML = data.shares.length ? data.shares.map((share) => `<div class="share-row" data-id="${share.id}"><div><strong>${escapeHtml(share.email)}</strong><p>${share.enabled ? '启用' : '已停用'} · ${share.expires_at ? `到期 ${escapeHtml(formatTime(share.expires_at))}` : '永久'}</p><code>页面：${escapeHtml(location.origin + share.page_url)}</code><code>最新 OTP：${escapeHtml(location.origin + share.otp_api)}</code><code>邮件列表：${escapeHtml(location.origin + share.emails_api)}</code><code>邮件详情：${escapeHtml(location.origin + share.detail_api)}</code><code>单封 OTP：${escapeHtml(location.origin + share.email_otp_api)}</code><code>附件：${escapeHtml(location.origin + share.attachment_api)}</code></div><div class="share-actions"><button class="btn ghost sm" data-action="copy">复制页面链接</button><button class="btn ghost sm" data-action="toggle">${share.enabled ? '停用' : '启用'}</button><button class="btn ghost sm" data-action="regenerate">重生成链接/密钥</button><button class="btn danger sm" data-action="delete">删除</button></div></div>`).join('') : '<p class="muted">尚未设置分享</p>';
   $('#share-list').querySelectorAll('.share-row').forEach((row) => {
     const share = data.shares.find((item) => item.id === Number(row.dataset.id));
@@ -458,10 +475,36 @@ async function loadShares() {
 }
 
 async function createShare() {
-  const data = await api('/api/shares', { method: 'POST', body: JSON.stringify({ account_id: Number($('#share-account').value), expires_days: Number($('#share-expires').value) || 0, api_key: $('#share-api-key').value.trim() || null }) });
-  $('#share-created').textContent = `页面：${location.origin + data.page_url}\n分享 API Key（仅显示本次）：${data.api_key}`;
-  $('#share-api-key').value = '';
-  await loadShares();
+  const ids = Array.from(shareSelected);
+  if (!ids.length) throw new Error('请先勾选邮箱');
+  const days = Number($('#share-expires').value);
+  if (!Number.isSafeInteger(days) || days < 0) throw new Error('有效期请输入非负整数');
+  const key = ids.length === 1 ? $('#share-api-key').value.trim() || null : null;
+  if (key && key.length < 24) throw new Error('分享 API Key 至少需要 24 位');
+  const button = $('#create-share-btn');
+  button.disabled = true;
+  let created = 0;
+  try {
+    for (const id of ids) {
+      button.textContent = `正在创建 ${created + 1}/${ids.length}`;
+      const data = await api('/api/shares', { method: 'POST', body: JSON.stringify({ account_id: id, expires_days: days, api_key: key }) });
+      const email = accounts.find((account) => account.id === id)?.email || id;
+      const output = $('#share-created');
+      output.textContent += `${output.textContent ? '\n\n' : ''}${email}\n页面：${location.origin + data.page_url}\n分享 API Key（仅显示本次）：${data.api_key}`;
+      shareSelected.delete(id);
+      sharedAccounts.add(id);
+      created++;
+    }
+    $('#share-api-key').value = '';
+    toast(`已创建 ${created} 个分享`);
+  } catch (error) {
+    throw new Error(`已创建 ${created} 个，未完成账号保留勾选：${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = '创建分享';
+    refreshShareAccountOptions();
+    await loadShares();
+  }
 }
 
 async function updateShare(id, payload, showSecret = false) {
@@ -524,6 +567,21 @@ $('#copy-api-key-btn').onclick = () => copyApiKey().catch((error) => toast(error
 $('#mail-otp-btn').onclick = () => mailLatestOtp().catch((error) => toast(error.message, 5000));
 $('#mail-read-btn').onclick = () => readMail().catch((error) => toast(error.message, 5000));
 $('#create-share-btn').onclick = () => createShare().catch((error) => toast(error.message, 5000));
+$('#share-search').onfocus = () => toggleSharePicker(true);
+$('#share-search').onclick = () => toggleSharePicker(true);
+$('#share-search').oninput = () => { refreshShareAccountOptions(); toggleSharePicker(true); };
+$('#share-picker-toggle').onclick = () => toggleSharePicker($('#share-picker-panel').classList.contains('hidden'));
+$('#share-clear').onclick = () => { shareSelected.clear(); refreshShareAccountOptions(); };
+$('#share-options').onchange = (event) => {
+  const checkbox = event.target.closest('input[data-id]');
+  if (!checkbox) return;
+  const id = Number(checkbox.dataset.id);
+  checkbox.checked ? shareSelected.add(id) : shareSelected.delete(id);
+  $('#share-selected-count').textContent = shareSelected.size;
+  $('#share-api-key').disabled = shareSelected.size > 1;
+};
+document.addEventListener('click', (event) => { if (!$('#share-picker').contains(event.target)) toggleSharePicker(false); });
+$('#share-picker').onkeydown = (event) => { if (event.key === 'Escape') toggleSharePicker(false); };
 $('#create-schedule-btn').onclick = () => createScheduledTask().catch((error) => toast(error.message, 5000));
 $('#schedule-search').onfocus = () => toggleSchedulePicker(true);
 $('#schedule-search').onclick = () => toggleSchedulePicker(true);

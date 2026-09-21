@@ -164,6 +164,15 @@ class TestPassword(unittest.TestCase):
 
 
 class TestOtpExtraction(unittest.TestCase):
+    def test_code_crossing_keyword_window_remains_complete(self):
+        for code in ('123456', '012345'):
+            for text in ('code' + ' ' * 55 + code, code + ' ' * 35 + 'code'):
+                with self.subTest(text=text):
+                    self.assertEqual(mail_service.extract_otp({'body_text': text}), code)
+
+    def test_window_does_not_turn_long_number_into_otp(self):
+        self.assertEqual(mail_service.extract_otp({'body_text': 'code' + ' ' * 55 + '123456789012'}), '')
+
     def test_extracts_latest_message_code(self):
         message = {"subject": "Your verification code", "body_text": "Use 482913 to continue.", "body_html": ""}
         self.assertEqual(mail_service.extract_otp(message), "482913")

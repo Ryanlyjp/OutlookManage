@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260912-inline-controls">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260920-share-picker">
 </head>
 <body>
   <div class="app-shell">
@@ -147,9 +147,17 @@
           </article>
           <article class="card share-manager">
             <h2>OTP 分享</h2>
-            <label>账号池邮箱<select id="share-account"></select></label>
+            <div class="schedule-picker" id="share-picker">
+              <label for="share-search">账号池邮箱</label>
+              <div class="schedule-search-row"><input id="share-search" type="search" name="share-account-filter" autocomplete="off" data-lpignore="true" data-1p-ignore data-bwignore="true" spellcheck="false" placeholder="搜索并勾选账号" aria-controls="share-picker-panel" aria-expanded="false"><button type="button" class="btn ghost" id="share-picker-toggle" aria-label="展开分享账号选择" aria-expanded="false">▾</button></div>
+              <div id="share-picker-panel" class="schedule-picker-panel hidden">
+                <div class="schedule-picker-head"><span>已选择（<strong id="share-selected-count">0</strong>）</span><button type="button" class="btn ghost sm" id="share-clear">取消勾选</button></div>
+                <div id="share-options" class="schedule-options"></div>
+              </div>
+            </div>
             <label>有效期（天，0 为永久）<input id="share-expires" type="number" min="0" value="0"></label>
             <label>分享 API Key（留空自动生成）<input id="share-api-key" autocomplete="off"></label>
+            <p id="share-key-hint" class="muted">多选时为每个邮箱自动生成独立密钥。</p>
             <button class="btn primary" id="create-share-btn">创建分享</button>
             <div id="share-created" class="result"></div>
           </article>
@@ -187,6 +195,6 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260912-multi-picker"></script>
+  <script src="/assets/app.js?v=20260920-share-picker"></script>
 </body>
 </html>

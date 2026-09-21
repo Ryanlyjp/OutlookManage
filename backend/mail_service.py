@@ -120,13 +120,14 @@ def visible_text(body_html: str) -> str:
 def extract_otp(message: dict[str, Any]) -> str:
     text = "\n".join((str(message.get("subject") or ""), str(message.get("body_text") or ""), visible_text(str(message.get("body_html") or ""))))
     for keyword in re.finditer(OTP_KEYWORDS, text, re.IGNORECASE):
-        after = text[keyword.end():keyword.end() + 60]
-        for match in re.finditer(OTP_VALUE, after):
+        for match in re.finditer(OTP_VALUE, text[keyword.end():]):
+            if match.start() >= 60:
+                break
             candidate = match.group(1)
             if any(char.isdigit() for char in candidate):
                 return candidate
-        before = text[max(0, keyword.start() - 40):keyword.start()]
-        candidates = [match.group(1) for match in re.finditer(OTP_VALUE, before) if any(char.isdigit() for char in match.group(1))]
+        before = text[:keyword.start()]
+        candidates = [match.group(1) for match in re.finditer(OTP_VALUE, before) if match.end() > keyword.start() - 40 and any(char.isdigit() for char in match.group(1))]
         if candidates:
             return candidates[-1]
     return ""
