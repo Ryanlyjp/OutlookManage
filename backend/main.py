@@ -992,13 +992,18 @@ def list_shares():
     } for row in rows]}
 
 
+def new_share_page_token(email: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", email.split("@", 1)[0])
+    return f"{name}-{secrets.token_urlsafe(32)}"
+
+
 @app.post("/api/shares")
 def create_share(payload: SharePayload):
-    fetch_account(payload.account_id)
+    account = fetch_account(payload.account_id)
     api_key = (payload.api_key or secrets.token_urlsafe(32)).strip()
     if len(api_key) < 24:
         raise HTTPException(400, "分享 API Key 至少需要 24 位")
-    token, timestamp = secrets.token_urlsafe(32), now_local()
+    token, timestamp = new_share_page_token(account["email"]), now_local()
     try:
         with get_conn(DB_PATH) as conn:
             cursor = conn.execute("INSERT INTO otp_shares(account_id,page_token,api_key_hash,enabled,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (payload.account_id, token, secret_hash(api_key), 1, expiry_from_days(payload.expires_days), timestamp, timestamp))
@@ -1018,7 +1023,7 @@ def update_share(share_id: int, payload: ShareUpdatePayload):
             raise HTTPException(404, "分享不存在")
         enabled = int(payload.enabled) if payload.enabled is not None else row["enabled"]
         expires_at = expiry_from_days(payload.expires_days) if payload.expires_days is not None else row["expires_at"]
-        page_token = secrets.token_urlsafe(32) if payload.regenerate_page_token else row["page_token"]
+        page_token = new_share_page_token(fetch_account(row["account_id"])["email"]) if payload.regenerate_page_token else row["page_token"]
         api_key_hash, raw_api_key = row["api_key_hash"], ""
         if payload.api_key is not None:
             raw_api_key = payload.api_key.strip() or secrets.token_urlsafe(32)

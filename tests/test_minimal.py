@@ -202,6 +202,29 @@ class TestOtpExtraction(unittest.TestCase):
 
 
 class TestShareSchema(unittest.TestCase):
+    def test_named_share_creation_rotation_and_legacy_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'accounts.db'
+            init_db(path)
+            with get_conn(path) as conn:
+                account_id = conn.execute('INSERT INTO accounts(email,password,client_id,refresh_token,created_at,updated_at) VALUES(?,?,?,?,?,?)', ('BradleyWalla136@outlook.com', '', 'cid', 'rt', 'now', 'now')).lastrowid
+                conn.commit()
+            with mock.patch.object(main, 'DB_PATH', path):
+                created = main.create_share(main.SharePayload(account_id=account_id))
+                token = created['page_url'].rsplit('/', 1)[1]
+                self.assertTrue(token.startswith('BradleyWalla136-'))
+                self.assertEqual(len(token.removeprefix('BradleyWalla136-')), 43)
+                self.assertEqual(main.get_share_by_page_token(token)['account_id'], account_id)
+                with get_conn(path) as conn:
+                    conn.execute('UPDATE otp_shares SET page_token=? WHERE id=?', ('legacy-random-token', created['id']))
+                    conn.commit()
+                self.assertEqual(main.get_share_by_page_token('legacy-random-token')['account_id'], account_id)
+                updated = main.update_share(created['id'], main.ShareUpdatePayload(regenerate_page_token=True))
+                self.assertTrue(updated['page_url'].startswith('/otp-share/BradleyWalla136-'))
+                self.assertNotEqual(updated['page_url'], created['page_url'])
+                with self.assertRaises(main.HTTPException):
+                    main.get_share_by_page_token('legacy-random-token')
+
     def test_one_share_per_account(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "accounts.db"
