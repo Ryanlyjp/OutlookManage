@@ -357,6 +357,37 @@ function toggleSharePicker(open) {
 }
 
 const scheduleSelected = new Set();
+const scheduleListSelected = new Set();
+let scheduleListIds = [];
+const shareListSelected = new Set();
+let shareListIds = [];
+
+function updateManagedListSelection(prefix, ids, selection) {
+  const existing = new Set(ids);
+  for (const id of selection) if (!existing.has(id)) selection.delete(id);
+  const list = $(`#${prefix}-list`);
+  list.querySelectorAll('.list-row-select').forEach((checkbox) => {
+    const checked = selection.has(Number(checkbox.dataset.id));
+    checkbox.checked = checked;
+    checkbox.closest('.schedule-row, .share-row').classList.toggle('selected-list-row', checked);
+  });
+  $(`#${prefix}-list-selected-count`).textContent = selection.size;
+  $(`#${prefix}-list-select-all`).disabled = !ids.length || selection.size === ids.length;
+  $(`#${prefix}-list-invert`).disabled = !ids.length;
+  $(`#${prefix}-list-delete-selected`).disabled = !selection.size;
+  $(`#${prefix}-list-delete-all`).disabled = !ids.length;
+}
+
+function changeManagedListSelection(prefix, ids, selection, mode) {
+  if (mode === 'all') ids.forEach((id) => selection.add(id));
+  else ids.forEach((id) => selection.has(id) ? selection.delete(id) : selection.add(id));
+  updateManagedListSelection(prefix, ids, selection);
+}
+
+function setManagedListBusy(prefix, busy) {
+  $(`#${prefix}-list`).querySelectorAll('button,input').forEach((element) => { element.disabled = busy; });
+  $(`#${prefix}-list`).previousElementSibling.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+}
 
 function refreshScheduleAccountOptions() {
   const existing = new Set(accounts.map((account) => account.id));
@@ -393,16 +424,23 @@ function scheduleStatus(status) {
 async function loadScheduledTasks() {
   refreshScheduleAccountOptions();
   const data = await api('/api/scheduled-tasks');
+  scheduleListIds = data.tasks.map((task) => task.id);
   $('#schedule-list').innerHTML = data.tasks.length ? data.tasks.map((task) => `<div class="schedule-row" data-id="${task.id}">
+    <div class="list-select"><input class="list-row-select" type="checkbox" data-id="${task.id}" aria-label="选择 ${escapeHtml(task.email)}"></div>
     <div class="schedule-main"><strong>${escapeHtml(task.email)}</strong><span>${task.enabled ? `每 ${Number(task.interval_minutes).toLocaleString('zh-CN')} 分钟 · 下次 ${escapeHtml(formatTime(task.next_run_at))}` : '已停止'} · TG ${task.notify_telegram ? '开启' : '关闭'}</span><span>添加于 ${escapeHtml(formatSingaporeTime(task.account_created_at))}</span></div>
     <div class="schedule-runs">${task.runs.length ? task.runs.map((run) => `<p><time>${escapeHtml(formatTime(run.created_at))}</time> ${run.status === 'ok' ? '正常' : '异常'} · ${escapeHtml(run.message)}</p>`).join('') : '<p class="muted">暂无执行记录</p>'}</div>
     <div class="schedule-actions"><button class="btn ghost sm" data-action="edit">编辑</button><button class="btn danger sm" data-action="delete">删除</button></div>
   </div>`).join('') : '<p class="muted">暂无定时任务</p>';
   $('#schedule-list').querySelectorAll('.schedule-row').forEach((row) => {
     const task = data.tasks.find((item) => item.id === Number(row.dataset.id));
+    row.querySelector('.list-row-select').onchange = (event) => {
+      event.target.checked ? scheduleListSelected.add(task.id) : scheduleListSelected.delete(task.id);
+      updateManagedListSelection('schedule', scheduleListIds, scheduleListSelected);
+    };
     row.querySelector('[data-action="edit"]').onclick = () => openScheduleEdit(task);
-    row.querySelector('[data-action="delete"]').onclick = () => deleteScheduledTask(task.id);
+    row.querySelector('[data-action="delete"]').onclick = () => deleteScheduledTasks([task.id], 'single').catch((error) => toast(error.message, 5000));
   });
+  updateManagedListSelection('schedule', scheduleListIds, scheduleListSelected);
 }
 
 async function createScheduledTask() {
@@ -454,24 +492,45 @@ async function saveScheduleEdit() {
   closeScheduleEdit(); toast('定时任务已保存'); await loadScheduledTasks();
 }
 
-async function deleteScheduledTask(id) {
-  if (!window.confirm('确认删除该定时任务及其执行记录？')) return;
-  await api(`/api/scheduled-tasks/${id}`, { method: 'DELETE' });
-  toast('定时任务已删除'); await loadScheduledTasks();
+async function deleteScheduledTasks(ids, scope = 'selected') {
+  if (!ids.length) return;
+  const prompt = scope === 'all' ? `确认删除全部 ${ids.length} 个定时任务及其执行记录？` : scope === 'single' ? '确认删除该定时任务及其执行记录？' : `确认删除选中的 ${ids.length} 个定时任务及其执行记录？`;
+  if (!window.confirm(prompt)) return;
+  setManagedListBusy('schedule', true);
+  let deleted = 0;
+  let failure = null;
+  try {
+    for (const id of ids) {
+      await api(`/api/scheduled-tasks/${id}`, { method: 'DELETE' });
+      scheduleListSelected.delete(id);
+      deleted++;
+    }
+  } catch (error) {
+    failure = error;
+  }
+  await loadScheduledTasks();
+  if (failure) throw new Error(`已删除 ${deleted} 个，后续删除已停止：${failure.message}`);
+  toast(`已删除 ${deleted} 个定时任务`);
 }
 
 async function loadShares() {
   const data = await api('/api/shares');
+  shareListIds = data.shares.map((share) => share.id);
   sharedAccounts = new Set(data.shares.map((share) => share.account_id));
   refreshShareAccountOptions();
-  $('#share-list').innerHTML = data.shares.length ? data.shares.map((share) => `<div class="share-row" data-id="${share.id}"><div><strong>${escapeHtml(share.email)}</strong><p>${share.enabled ? '启用' : '已停用'} · ${share.expires_at ? `到期 ${escapeHtml(formatTime(share.expires_at))}` : '永久'}</p><code>页面：${escapeHtml(location.origin + share.page_url)}</code><code>最新 OTP：${escapeHtml(location.origin + share.otp_api)}</code><code>邮件列表：${escapeHtml(location.origin + share.emails_api)}</code><code>邮件详情：${escapeHtml(location.origin + share.detail_api)}</code><code>单封 OTP：${escapeHtml(location.origin + share.email_otp_api)}</code><code>附件：${escapeHtml(location.origin + share.attachment_api)}</code></div><div class="share-actions"><button class="btn ghost sm" data-action="copy">复制页面链接</button><button class="btn ghost sm" data-action="toggle">${share.enabled ? '停用' : '启用'}</button><button class="btn ghost sm" data-action="regenerate">重生成链接/密钥</button><button class="btn danger sm" data-action="delete">删除</button></div></div>`).join('') : '<p class="muted">尚未设置分享</p>';
+  $('#share-list').innerHTML = data.shares.length ? data.shares.map((share) => `<div class="share-row" data-id="${share.id}"><div class="list-select"><input class="list-row-select" type="checkbox" data-id="${share.id}" aria-label="选择 ${escapeHtml(share.email)}"></div><div class="share-main"><strong>${escapeHtml(share.email)}</strong><p>${share.enabled ? '启用' : '已停用'} · ${share.expires_at ? `到期 ${escapeHtml(formatTime(share.expires_at))}` : '永久'}</p><code>页面：${escapeHtml(location.origin + share.page_url)}</code><code>最新 OTP：${escapeHtml(location.origin + share.otp_api)}</code><code>邮件列表：${escapeHtml(location.origin + share.emails_api)}</code><code>邮件详情：${escapeHtml(location.origin + share.detail_api)}</code><code>单封 OTP：${escapeHtml(location.origin + share.email_otp_api)}</code><code>附件：${escapeHtml(location.origin + share.attachment_api)}</code></div><div class="share-actions"><button class="btn ghost sm" data-action="copy">复制页面链接</button><button class="btn ghost sm" data-action="toggle">${share.enabled ? '停用' : '启用'}</button><button class="btn ghost sm" data-action="regenerate">重生成链接/密钥</button><button class="btn danger sm" data-action="delete">删除</button></div></div>`).join('') : '<p class="muted">尚未设置分享</p>';
   $('#share-list').querySelectorAll('.share-row').forEach((row) => {
     const share = data.shares.find((item) => item.id === Number(row.dataset.id));
+    row.querySelector('.list-row-select').onchange = (event) => {
+      event.target.checked ? shareListSelected.add(share.id) : shareListSelected.delete(share.id);
+      updateManagedListSelection('share', shareListIds, shareListSelected);
+    };
     row.querySelector('[data-action="copy"]').onclick = () => navigator.clipboard.writeText(location.origin + share.page_url).then(() => toast('页面链接已复制'));
     row.querySelector('[data-action="toggle"]').onclick = () => updateShare(share.id, { enabled: !share.enabled });
     row.querySelector('[data-action="regenerate"]').onclick = () => updateShare(share.id, { regenerate_page_token: true, api_key: '' }, true);
-    row.querySelector('[data-action="delete"]').onclick = () => deleteShare(share.id);
+    row.querySelector('[data-action="delete"]').onclick = () => deleteShares([share.id], 'single').catch((error) => toast(error.message, 5000));
   });
+  updateManagedListSelection('share', shareListIds, shareListSelected);
 }
 
 async function createShare() {
@@ -513,9 +572,25 @@ async function updateShare(id, payload, showSecret = false) {
   await loadShares(); toast('分享已更新');
 }
 
-async function deleteShare(id) {
-  if (!window.confirm('确认删除该分享？链接和 API Key 将立即失效。')) return;
-  await api(`/api/shares/${id}`, { method: 'DELETE' }); await loadShares(); toast('分享已删除');
+async function deleteShares(ids, scope = 'selected') {
+  if (!ids.length) return;
+  const prompt = scope === 'all' ? `确认删除全部 ${ids.length} 个分享？所有链接和 API Key 将立即失效。` : scope === 'single' ? '确认删除该分享？链接和 API Key 将立即失效。' : `确认删除选中的 ${ids.length} 个分享？对应链接和 API Key 将立即失效。`;
+  if (!window.confirm(prompt)) return;
+  setManagedListBusy('share', true);
+  let deleted = 0;
+  let failure = null;
+  try {
+    for (const id of ids) {
+      await api(`/api/shares/${id}`, { method: 'DELETE' });
+      shareListSelected.delete(id);
+      deleted++;
+    }
+  } catch (error) {
+    failure = error;
+  }
+  await loadShares();
+  if (failure) throw new Error(`已删除 ${deleted} 个，后续删除已停止：${failure.message}`);
+  toast(`已删除 ${deleted} 个分享`);
 }
 
 async function changePassword() {
@@ -582,6 +657,10 @@ $('#share-options').onchange = (event) => {
 };
 document.addEventListener('click', (event) => { if (!$('#share-picker').contains(event.target)) toggleSharePicker(false); });
 $('#share-picker').onkeydown = (event) => { if (event.key === 'Escape') toggleSharePicker(false); };
+$('#share-list-select-all').onclick = () => changeManagedListSelection('share', shareListIds, shareListSelected, 'all');
+$('#share-list-invert').onclick = () => changeManagedListSelection('share', shareListIds, shareListSelected, 'invert');
+$('#share-list-delete-selected').onclick = () => deleteShares(Array.from(shareListSelected)).catch((error) => toast(error.message, 5000));
+$('#share-list-delete-all').onclick = () => deleteShares([...shareListIds], 'all').catch((error) => toast(error.message, 5000));
 $('#create-schedule-btn').onclick = () => createScheduledTask().catch((error) => toast(error.message, 5000));
 $('#schedule-search').onfocus = () => toggleSchedulePicker(true);
 $('#schedule-search').onclick = () => toggleSchedulePicker(true);
@@ -598,6 +677,10 @@ $('#schedule-options').onchange = (event) => {
 $('#schedule-random').onchange = () => { $('#schedule-range').disabled = !$('#schedule-random').checked; };
 document.addEventListener('click', (event) => { if (!$('#schedule-picker').contains(event.target)) toggleSchedulePicker(false); });
 $('#schedule-picker').onkeydown = (event) => { if (event.key === 'Escape') toggleSchedulePicker(false); };
+$('#schedule-list-select-all').onclick = () => changeManagedListSelection('schedule', scheduleListIds, scheduleListSelected, 'all');
+$('#schedule-list-invert').onclick = () => changeManagedListSelection('schedule', scheduleListIds, scheduleListSelected, 'invert');
+$('#schedule-list-delete-selected').onclick = () => deleteScheduledTasks(Array.from(scheduleListSelected)).catch((error) => toast(error.message, 5000));
+$('#schedule-list-delete-all').onclick = () => deleteScheduledTasks([...scheduleListIds], 'all').catch((error) => toast(error.message, 5000));
 $('#close-schedule-modal-btn').onclick = closeScheduleEdit;
 $('#cancel-schedule-edit-btn').onclick = closeScheduleEdit;
 $('#save-schedule-edit-btn').onclick = () => saveScheduleEdit().catch((error) => toast(error.message, 5000));

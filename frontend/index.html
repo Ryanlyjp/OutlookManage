@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Outlook Graph 测活</title>
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260920-share-picker">
+  <link rel="stylesheet" href="/assets/styles.css?v=20261021-list-batch-delete">
 </head>
 <body>
   <div class="app-shell">
@@ -57,7 +57,14 @@
             </div>
           </div>
         </article>
-        <div class="card schedule-list-card"><h2>任务列表</h2><div id="schedule-list"><p class="muted">正在加载…</p></div></div>
+        <div class="card schedule-list-card">
+          <h2>任务列表</h2>
+          <div class="list-batch-toolbar" aria-label="定时任务批量操作">
+            <span>已选择 <strong id="schedule-list-selected-count">0</strong> 项</span>
+            <div class="list-batch-actions"><button class="btn ghost sm" id="schedule-list-select-all">全选</button><button class="btn ghost sm" id="schedule-list-invert">反选</button><button class="btn danger sm" id="schedule-list-delete-selected" disabled>删除选中</button><button class="btn danger sm" id="schedule-list-delete-all">删除全部</button></div>
+          </div>
+          <div id="schedule-list"><p class="muted">正在加载…</p></div>
+        </div>
       </section>
 
       <section id="mail" class="page">
@@ -162,7 +169,14 @@
             <div id="share-created" class="result"></div>
           </article>
         </div>
-        <div class="card share-list-card"><h2>已设置分享</h2><div id="share-list"></div></div>
+        <div class="card share-list-card">
+          <h2>已设置分享</h2>
+          <div class="list-batch-toolbar" aria-label="已分享接码链接批量操作">
+            <span>已选择 <strong id="share-list-selected-count">0</strong> 项</span>
+            <div class="list-batch-actions"><button class="btn ghost sm" id="share-list-select-all">全选</button><button class="btn ghost sm" id="share-list-invert">反选</button><button class="btn danger sm" id="share-list-delete-selected" disabled>删除选中</button><button class="btn danger sm" id="share-list-delete-all">删除全部</button></div>
+          </div>
+          <div id="share-list"></div>
+        </div>
       </section>
 
       <section id="logs" class="page">
@@ -195,6 +209,6 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <script src="/assets/app.js?v=20260920-share-picker"></script>
+  <script src="/assets/app.js?v=20261021-list-batch-delete"></script>
 </body>
 </html>
